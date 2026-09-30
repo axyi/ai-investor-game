@@ -4,8 +4,8 @@ model: claude-opus-5-5 (lab session, 1M context; drafting, audit and apply subag
 model_reason: "spec authoring is where an error multiplies downstream, so standards/workflow.md §3 sends it to the strongest model; the executor that runs this spec is claude-sonnet-5 (named in the spec header)"
 harness: Claude Code (lab session), spec-authoring skill
 stage: spec
-tokens_in: unknown   # measured afterwards from session transcripts, see docs/llm-usage.md row 1
-tokens_out: unknown
+tokens_in: see docs/llm-usage.md row 1   # measured from the session transcripts (main + subagents) and the Codex usage lines
+tokens_out: see docs/llm-usage.md row 1
 ---
 
 Owner of: `docs/spec/spec-v0.md`, `docs/prompts/01-spec-v0.md`, `docs/llm-usage.md` row 1.
