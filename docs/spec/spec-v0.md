@@ -36,8 +36,11 @@ versus actual.
 
 **REQ-V0-EC-04 (MUST) — prompts, commits.** One prompt → one commit
 (`AGENTS.md:90-96`), body `(prompt: docs/prompts/NN-<slug>.md)`; prompt file =
-`standards/reporting.md:21-32` frontmatter + Goal / Constraints / Acceptance /
-Stop (`standards/workflow.md:315-317`); delegated: the subagent brief + brief
+YAML frontmatter `date`, `model`, `model_reason`, `harness`, `stage` (`spec` |
+`generation` | `fix` | `review` | `docs`), `tokens_in`, `tokens_out` (`unknown`
+when unexposed), then the full prompt text as `## Goal` / `## Constraints` /
+`## Acceptance` / `## Stop` — the shape of `docs/prompts/01-spec-v0.md` (lab
+source `standards/reporting.md:21-32`, not readable from this repo); delegated: the subagent brief + brief
 path. Chronological: T0 none (runs under `go`, quoted atop `02`; no commit);
 T1…T7 = `02`…`08`; T8's review request `09`, committed with
 `docs/reports/review-v0.md`; fixes and T9 take the next free number. A repair
@@ -222,7 +225,9 @@ checkpoint. No blanket warning filter is allowed.
 `DecisionModel` Protocol
 (`count_state_tokens(checkpoint, state) -> int`, `predict(checkpoint, state,
 questions) -> dict`); `DecisionRunner(model, timeout_s=60.0)` (`run`, `close`);
-`LayaDecisionModel(agents, serialize)`; `load_decision_model(laya_module=None)`;
+`LayaDecisionModel(agents, serialize, encode)`; `load_decision_model(laya_module=None)`
+(takes `serialize_state` and `encode_text` from `laya_module.common` after the import
+and injects them — no module-level `laya` import, PKG-03);
 `ChatModel` Protocol (`complete(system, user) -> str`, raises `ChatError`);
 `HttpChatModel(config, transport=None)`; `voice(model, turn, err=None) -> Voice(line,
 options, fallback)`; `play(runner, chat, read_line, write, err=None, *, show_decisions, now)
@@ -556,12 +561,12 @@ import. Inside `load_decision_model()`, after importing or receiving `laya_modul
 exactly as §3.2 (`cfg.get("max_len")` 512 / 1024); any failure (a failed pin assert: the
 installed `laya` is not the locked one) → `LoadError` carrying the exception class name.
 `count_state_tokens` = §3.2's `state_tokens`, mirroring laya 0.3.22's own serialization
-exactly: it encodes `serialize(state).replace(tok.mask_token, " ")` (the injected
-`serialize` = `laya.common.serialize_state`; as `laya/common.py:203` does — authoring
-proof, read in the installed package) with `add_special_tokens=False`, through
-`laya.common.encode_text` (which holds laya's tokenizer lock, `laya/common.py:22-34`) —
-never `tok(...)` directly, since counting runs while other checks' `predict` calls are
-live; `predict` passes through.
+exactly: it computes `len(encode(tok, serialize(state).replace(tok.mask_token, " "),
+add_special_tokens=False)["input_ids"])` with the injected `serialize` =
+`laya.common.serialize_state` (as `laya/common.py:203` does — authoring proof, read in
+the installed package) and the injected `encode` = `laya.common.encode_text` (which
+holds laya's tokenizer lock, `laya/common.py:22-34`) — never `tok(...)` directly, since
+counting runs while other checks' `predict` calls are live; `predict` passes through.
 
 **REQ-V0-DEC-02 (MUST) — TECH.** `TECH_QUESTIONS` (§3.2) on `en`; state keys in
 order `player_offer {investment, equity}`, `investor {budget, max_equity, interest,
@@ -853,7 +858,10 @@ the executor's.
 `socket.socket.connect` raise `RuntimeError`, sets `HF_HUB_OFFLINE=1`.
 `laya_model` is tested with a fake agent (`predict`, `tok` with `mask_token`, `cfg`) and a fake
 `laya_module` (`PINNED_REVISIONS[REPO] == PINNED_SHA`; the English `load` warns
-`TEMPERATURE_WARNING`, unless a test varies either); `chat` with `httpx.MockTransport`.
+`TEMPERATURE_WARNING`, unless a test varies either) that also exposes
+`common.serialize_state` and `common.encode_text`; `LayaDecisionModel` unit tests
+inject fake `serialize` / `encode` directly (the fake `encode` records its calls);
+`chat` with `httpx.MockTransport`.
 
 **REQ-V0-TST-02 (MUST)** A subprocess imports every `investor_game` module
 (`pkgutil.iter_modules`); `laya` and `torch` stay out of `sys.modules`.
@@ -906,7 +914,7 @@ Tests (`(neg)` = a rejection or failure path is the subject):
   `DecisionError("shape")`; over `LayaDecisionModel` with TST-01's fake agent, a
   STAKEHOLDER `player_message` containing the fake tokenizer's `mask_token` literal
   counts equal to the fake's reported `state_tokens` (computed as DEC-01's laya line
-  does); the counter reaches the tokenizer only through the injected `encode_text` —
+  does); the counter reaches the tokenizer only through the injected `encode` —
   no `shape`); `T-V0-DEC-14` (neg)
   attempt_counts (a fake counting `predict` calls per check: persistent truncation →
   exactly 2 TECH calls, then `DecisionError("truncated")`; truncation recovered by
@@ -1104,7 +1112,7 @@ the `Context boundaries` bullet (`:40-42`) becomes exactly:
   the repo, NEVER committed.
 ```
 
-**REQ-V0-RPT-01 (MUST)** `docs/reports/report-v0.md` (`standards/reporting.md:64-84`):
+**REQ-V0-RPT-01 (MUST)** `docs/reports/report-v0.md` (the fields below are the complete list; lab source `standards/reporting.md:64-84`, not readable from this repo):
 
 ```text
 STATUS: done | stopped; SPEC: <bytes> B ≈ <÷ 4> tokens (wc -c); MODELS: <executor> (<harness>), reviewer <model>; CONSTRAINTS: <self-imposed>
@@ -1128,7 +1136,10 @@ RECOMMENDED NEXT STEP: <what the operator decides>
 ```
 
 **REQ-V0-RPT-03 (MUST)** `docs/reports/tg-post-v0.md`: Russian, ≤ 1500 chars,
-`standards/reporting.md:99-124`, executor named, `https://github.com/axyi/ai-investor-game`.
+structure per `AGENTS.md` § Reporting: constraints → result → metrics (executor
+model always named; spec tokens, prompts, first-run, bugs, tokens in/out, cost —
+or the public-API estimate when the harness hides counters) → link; executor
+named, `https://github.com/axyi/ai-investor-game`.
 
 **REQ-V0-RPT-04 (MUST)** `docs/llm-usage.md`: a row per prompt from row 2
 (`unknown` if unexposed; tokens from the session transcript where available), Σ
@@ -1268,7 +1279,7 @@ called through the lab's cross-review seam with the plan passed by file. 24 find
 23 accepted (7 adapted), 1 rejected (a transport artefact of the lab's sanitiser).
 Before round 1 the draft also went through a fresh-context citation + fence audit
 (28 external citations checked, all three fences re-run offline) and 11 lab rulings on
-the contradictions it reported. The spec ends at ≈ 88 KB, above `standards/workflow.md`
+the contradictions it reported. The spec ends at ≈ 89 KB, above `standards/workflow.md`
 §12's ≈ 80 KB ceiling; it is not split, because no task reads it whole — §10's reading
 map bounds every task's reading and Appendix C (≈ 12 KB) is in no task's map.
 After round 3 the lab ruled on six residuals its applier reported (also unreviewed by
@@ -1276,7 +1287,9 @@ the challenger): the exit-4 classification is by violated invariant alone (GATE-
 `count_state_tokens` mirrors laya's mask-token replacement and tokenizes through
 `laya.common.encode_text` under laya's tokenizer lock (DEC-01, `T-V0-DEC-13`); GAME-02's
 single-outcome rule covers every terminal outcome; §2 PKG-05 joined the T2/T4/T5
-reading cells; and this size note.
+reading cells; and this size note. A last reachability pass stated the prompt, report
+and tg-post formats inline (the lab's standards sit above this repo's root, EC-01) and
+gave laya's `serialize_state` / `encode_text` one injection seam (PKG-05, DEC-01, TST-01).
 
 ### Round 1 of at most 3 — against 5693eb1; 10 findings, 9 accepted (4 adapted), 1 rejected
 
