@@ -1,6 +1,6 @@
 # ai-investor-game — implementation spec v0
 
-Status: draft — awaiting the lab's cross-review (Appendix C); not ready for `go`
+Status: ready for `go` — cross-review closed 2026-09-30 (3 rounds, `round_limit`, Appendix C)
 Base: `main` = `8385584` (scaffold, no tag) + paperwork: this file,
 `docs/prompts/01-spec-v0.md`, `docs/llm-usage.md` row 1. Lab assignment 9,
 version `0.1.0`. Ids `REQ-V0-<GROUP>-NN` (MUST | NON-GOAL); tests
@@ -86,41 +86,77 @@ status code (`.status`, or `e.code` of an `HTTPError`) or, on a `URLError`,
 `key_check=unreachable` — never the key, never a traceback — and exits 0 for
 {200, 404} and 1 otherwise; rule: 200 = pass; 404 is provisional and passes T0 only if
 the immediately following chat probe succeeds; any other code or
-`key_check=unreachable` = blocked]]`. A blocked key check's RPT-02 `AT:` names the
-failed condition as the printed line prefixed with `key check: ` —
-`key check: <code>` or `key check: key_check=unreachable` — and quotes no exception
-text. The cache alternative needs
+`key_check=unreachable` = blocked]]`. A blocked key check's or chat probe's RPT-02
+`AT:` is its printed line, verbatim, prefixed `key check: ` or `chat probe: ` —
+e.g. `key check: key_check=unreachable`, `chat probe: chat_probe=timeout` — and quotes
+no exception text. The cache alternative needs
 both the English root (`$D`) and `$D/multilingual`; free disk is measured on `$H`
 (the Hugging Face cache when it exists, else `$HOME`).
 Then the chat probe:
 
 ```bash
-uv run --no-project --env-file .env python - <<'EOF'
-import json, os, urllib.request as r
-effort = os.environ.get("CHAT_REASONING_EFFORT", "low")
-body = {"model": os.environ["CHAT_MODEL"], "max_tokens": int(os.environ.get("CHAT_MAX_TOKENS") or 2000),
-        "messages": [{"role": "system", "content": 'Ответь только JSON: {"investor_line": "...", "options": []}'},
-                     {"role": "user", "content": '{"player_message": "€500k за 20%"}'}]}
-if effort:
-    body["reasoning"] = {"effort": effort, "exclude": True}
-url = (os.environ.get("CHAT_BASE_URL") or "https://openrouter.ai/api/v1").rstrip("/") + "/chat/completions"
-req = r.Request(url, data=json.dumps(body).encode(), headers={"Authorization": "Bearer " + os.environ["CHAT_API_KEY"], "Content-Type": "application/json"})
-resp = r.urlopen(req, timeout=30)
-choice = json.load(resp)["choices"][0]
-text, fence = choice["message"]["content"].strip(), "`" * 3
-if text.startswith(fence):
-    text = text.split("\n", 1)[1].rsplit(fence, 1)[0]
-json.loads(text)
-assert resp.status == 200 and choice["finish_reason"] == "stop"
-print(resp.status, choice["finish_reason"])
+uv run --no-project --env-file .env python - <<'EOF'   # prints one chat_probe=<sentinel> line only
+import json, os, urllib.error, urllib.request as r
+from http.client import HTTPException
+
+
+def done(sentinel):  # never the URL, headers, key or a traceback; never a retry
+    print("chat_probe=" + sentinel)
+    raise SystemExit(0 if sentinel == "ok" else 1)
+
+
+try:
+    effort = os.environ.get("CHAT_REASONING_EFFORT", "low")
+    body = {"model": os.environ["CHAT_MODEL"], "max_tokens": int(os.environ.get("CHAT_MAX_TOKENS") or 2000),
+            "messages": [{"role": "system", "content": 'Ответь только JSON: {"investor_line": "...", "options": []}'},
+                         {"role": "user", "content": '{"player_message": "€500k за 20%"}'}]}
+    if body["max_tokens"] < 1:
+        raise ValueError
+    if effort:
+        body["reasoning"] = {"effort": effort, "exclude": True}
+    url = (os.environ.get("CHAT_BASE_URL") or "https://openrouter.ai/api/v1").rstrip("/") + "/chat/completions"
+    req = r.Request(url, data=json.dumps(body).encode(), headers={"Authorization": "Bearer " + os.environ["CHAT_API_KEY"], "Content-Type": "application/json"})
+except (KeyError, ValueError):
+    done("config")
+try:
+    with r.urlopen(req, timeout=30) as resp:
+        status, raw = resp.status, resp.read()
+except urllib.error.HTTPError as e:
+    done(f"http_status:{e.code}")
+except urllib.error.URLError as e:
+    done("timeout" if isinstance(e.reason, TimeoutError) else "connect")
+except TimeoutError:
+    done("timeout")
+except (OSError, HTTPException):  # any other transport failure
+    done("connect")
+if status != 200:
+    done(f"http_status:{status}")
+try:
+    choice = json.loads(raw)["choices"][0]
+    content = choice["message"]["content"]
+    if not isinstance(content, str):
+        raise TypeError
+except (ValueError, LookupError, TypeError):
+    done("api_schema")
+if not content:
+    done("empty_content")
+text, fence = content.strip(), "`" * 3
+try:
+    if text.startswith(fence):
+        text = text.split("\n", 1)[1].rsplit(fence, 1)[0]
+    json.loads(text)
+except (ValueError, IndexError):
+    done("invalid_json")
+done("ok" if choice.get("finish_reason") == "stop" else "finish_reason")
 EOF
 ```
 
 `[[VERIFY: T0 sends ONE probe request of exactly this body shape to the operator's
-CHAT_MODEL; confirmation = HTTP 200, non-empty `choices[0].message.content` that
-`json.loads` accepts after fence stripping, `finish_reason` "stop"; on failure the
-run is BLOCKED (blocker template naming the model and the failed condition) — the
-executor never tunes the request on gate 5]]`. No value is printed. Gates 1–4 need
+CHAT_MODEL, never retried; confirmation = `chat_probe=ok` (HTTP 200, non-empty string
+`choices[0].message.content` that `json.loads` accepts after fence stripping,
+`finish_reason` "stop"); any other sentinel (`connect` = any non-timeout transport
+failure) blocks the run (blocker template naming the model and the sentinel) — the
+executor never tunes the request on gate 5]]`. Gates 1–4 need
 T1's pyproject: T0 records them `N/A`. Any failure = a blocked run, never a red gate.
 
 **REQ-V0-EC-07 (MUST) — the lock.** T1 runs `uv lock` once, after §3.1; later
@@ -175,9 +211,11 @@ modified: README.md, AGENTS.md, docs/llm-usage.md
 `laya_model.load_decision_model()`; importing any `investor_game` module leaves
 both out of `sys.modules`.
 
-**REQ-V0-PKG-04 (MUST)** Before `import laya`, `load_decision_model()` applies
-§3.2's `HF_HUB_DISABLE_PROGRESS_BARS` default (it drops the `Fetching 5 files` bar,
-audit re-run) and `TEMPERATURE_WARNING` filter; no blanket ignore.
+**REQ-V0-PKG-04 (MUST)** Before `import laya`, `load_decision_model()` applies only the
+`HF_HUB_DISABLE_PROGRESS_BARS` default. It loads the English checkpoint under §3.2's
+`catch_warnings`, verifies the expected temperature warning, then installs the narrow
+`TEMPERATURE_WARNING` `RuntimeWarning` filter before loading the multilingual
+checkpoint. No blanket warning filter is allowed.
 
 **REQ-V0-PKG-05 (MUST) — seams** (cross-task names, exact): `load_config(env, *, require_key=True) -> Config`;
 `parse_move(line, option_count) -> Move(kind, index, offer, text)` (`index` one-based, PAR-01);
@@ -249,7 +287,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 import laya
-from laya.common import serialize_state
+from laya.common import encode_text, serialize_state
 
 REPO = "convaiinnovations/laya"
 TEMPERATURE_WARNING = r"laya: this checkpoint ships invalid temperatures"
@@ -265,7 +303,8 @@ assert en.cfg.get("max_len") == 512 and ml.cfg.get("max_len") == 1024
 
 
 def state_tokens(agent, state):
-    return len(agent.tok(serialize_state(state), add_special_tokens=False)["input_ids"])
+    text = serialize_state(state).replace(agent.tok.mask_token, " ")
+    return len(encode_text(agent.tok, text, add_special_tokens=False)["input_ids"])
 
 
 TECH_QUESTIONS = {
@@ -510,11 +549,19 @@ re-prompt: no model call, no turn consumed. After one → a decision turn with
 
 ### 4.4 Decision layer
 
-**REQ-V0-DEC-01 (MUST) — models.** `REPO`, `PINNED_SHA =
-laya.PINNED_REVISIONS[REPO]`, `en` / `ml` loaded exactly as §3.2 (`cfg.get("max_len")`
-512 / 1024); any failure → `LoadError` carrying the exception class name.
-`count_state_tokens` = §3.2's `state_tokens` via the injected `serialize`
-(`laya.common.serialize_state`); `predict` passes through.
+**REQ-V0-DEC-01 (MUST) — models.** `REPO = "convaiinnovations/laya"` and `PINNED_SHA =
+"55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851"` are module constants that require no `laya`
+import. Inside `load_decision_model()`, after importing or receiving `laya_module`, assert
+`laya_module.PINNED_REVISIONS[REPO] == PINNED_SHA` before loading. `en` / `ml` loaded
+exactly as §3.2 (`cfg.get("max_len")` 512 / 1024); any failure (a failed pin assert: the
+installed `laya` is not the locked one) → `LoadError` carrying the exception class name.
+`count_state_tokens` = §3.2's `state_tokens`, mirroring laya 0.3.22's own serialization
+exactly: it encodes `serialize(state).replace(tok.mask_token, " ")` (the injected
+`serialize` = `laya.common.serialize_state`; as `laya/common.py:203` does — authoring
+proof, read in the installed package) with `add_special_tokens=False`, through
+`laya.common.encode_text` (which holds laya's tokenizer lock, `laya/common.py:22-34`) —
+never `tok(...)` directly, since counting runs while other checks' `predict` calls are
+live; `predict` passes through.
 
 **REQ-V0-DEC-02 (MUST) — TECH.** `TECH_QUESTIONS` (§3.2) on `en`; state keys in
 order `player_offer {investment, equity}`, `investor {budget, max_equity, interest,
@@ -547,12 +594,15 @@ checks at once (first-attempt concurrency stays three), waits ≤ `timeout_s` in
 resubmits a failed or late check once — exception, timeout and invalid shape use this
 single retry; all failed checks of a turn are retried concurrently with one fresh
 batch deadline — and a second failure →
-`DecisionError(<class> | "timeout" | "shape")`. Each check has at most two attempts
+`DecisionError(<class> | "oom" | "timeout" | "shape")` (`oom`: DEC-10). Each check has at most two attempts
 in total; a shape-valid truncated result is DEC-06's to retry, never this rule's. A
 returned result that fails shape validation is a failed check; it passes iff
 `answers` holds its check's question keys with §3.2's value types (score:
 `probabilities` over `"0"`…`"4"`, float values; choice: `choice` a criteria key;
-noul: `noul` a float) and `usage["truncated"]` is a bool. `close()` =
+noul: `noul` a float), `usage["truncated"]` is a bool and `usage["state_tokens"]` a
+non-`bool` int equal to `count_state_tokens(checkpoint, submitted_state)` (§3.2 asserts
+it on both checkpoints); a mismatch or a missing field is `shape` and consumes DEC-07's
+retry. `close()` =
 `shutdown(wait=False, cancel_futures=True)`; exit 3 writes ERR-01's message and
 DEC-10's line, flushes and calls `os._exit(3)`.
 
@@ -561,8 +611,11 @@ DEC-10's line, flushes and calls `os._exit(3)`.
 `laya_error=<category>`, the category in the closed set `load:<ExceptionClass>` (a
 `LoadError`, DEC-01), `timeout`, `shape`, `truncated` (a `DecisionError` of that word,
 DEC-06 / DEC-07), `exception:<ExceptionClass>` (a `DecisionError(<class>)`: `predict`
-raised on both attempts, DEC-07) — the class name only, never the exception's message
-text, which could hold paths under the user's home. GATE-04 classes a red live run by
+raised on both attempts, DEC-07), `oom` (a `DecisionError("oom")`: that exception is a
+`MemoryError`, or a `RuntimeError` whose message contains "out of memory" or
+"DefaultCPUAllocator"; a load failure stays `load:<class>`) — the class name only, never
+the exception's message text (inspected for `oom`, never printed), which could hold paths
+under the user's home. GATE-04 classes a red live run by
 it; rows 1–3 of ERR-01 write no such line.
 
 **REQ-V0-DEC-08 (NON-GOAL)** Larger decision models (NeoHorse-Jev-4B, JEV-27B),
@@ -574,19 +627,23 @@ fine-tuning Laya. **REQ-V0-DEC-09 (NON-GOAL)** `min_confidence`.
 `Загрузка моделей…`, loads once; `play` prints `Выберите инвестора:` +
 `{i}. {name} — {tone}`, `Выберите стартап:` + `{i}. {name} — {description}, оценка {valuation}`
 (bad entry → `Введите номер от 1 до {n}.`), `Вы продаёте стартап «{name}». Текущая оценка: {valuation}`,
-then the opening, turns, the outcome line, `deal_summary` on a deal, and returns
-RESULT; `main` prints any verdict line (GAME-06's message, GAME-07's `SELFTEST OK` /
+then the opening, turns, the outcome line and `deal_summary` on a deal, and
+returns RESULT; `main` prints any verdict line (GAME-06's message, GAME-07's `SELFTEST OK` /
 `SELFTEST FAILED`), then RESULT (GAME-05).
 Prompt `> `. Channels: the exit-2 and exit-3 messages (ERR-01 rows 1–6), DEC-10's
 `laya_error=` lines and CHAT-09's `chat_error=` lines go to `err`; everything else — menus, investor lines, hints,
 fallback lines, the outcome line, RESULT — to `write`.
 
 **REQ-V0-GAME-02 (MUST) — voice, then code's lines.** Each investor turn (opening
-included) makes one `voice` call, printed `Инвестор: {line}`; code then prints
-`Предложение инвестора: {X} за {Y}%` (opening, counter, reject) or the RUL-05
-line, then `Ваш ход:`, `{i}. {text} ({X} за {Y}%)` per offer option (its fields),
-`{k+1}. Принять предложение инвестора`, `{k+2}. Выйти из переговоров` (numbers read
-per PAR-01). No number is parsed from LLM prose; an option's `({X} за {Y}%)` suffix
+included) makes one `voice` call, printed `Инвестор: {line}`. After opening, counter,
+or reject, print the authoritative standing offer and then `Ваш ход:` with options.
+After any terminal outcome (deal, any walk-away, `max_turns`, `player_quit`), print the
+RUL-05 outcome exactly once, print `deal_summary` exactly once for a deal, display no
+further prompt or options, and return RESULT.
+GAME-01 does not print a second outcome line. Standing offer
+`Предложение инвестора: {X} за {Y}%`; options `{i}. {text} ({X} за {Y}%)` per offer
+option (its fields), `{k+1}. Принять предложение инвестора`, `{k+2}. Выйти из
+переговоров` (numbers read per PAR-01). No number is parsed from LLM prose; an option's `({X} за {Y}%)` suffix
 shows its validated fields, the chat LLM's proposal for the player (SEC-02).
 
 **REQ-V0-GAME-03 (MUST) — CLI.** `python -m investor_game [--show-decisions]
@@ -623,7 +680,8 @@ it is valid only together with `--script` (GAME-03).
 `len(json.dumps(state, ensure_ascii=False)) // 4`; TECH: `player_offer.equity ≥
 investor.max_equity − 10` → level 4, `accept`, noul 0.8, else level 1, `counter`,
 0.2; MORAL 0.9 iff `munitions` in the text, else 0.05; STAKEHOLDER `rude` iff
-`проваливайте` in the lower-cased message, else `neutral`; §3.2 shapes.
+`проваливайте` in the lower-cased message, else `neutral`; §3.2 shapes, `usage`
+`{"truncated": false, "state_tokens": <its tokens>}`.
 `FakeChatModel`: fenced JSON, line `Фейковый инвестор: ход принят.`, options
 500000/30 and 500000/25 (text `Предлагаю {X} за {Y}%`); `fail=True` raises
 `ChatError("http_status:500")` (CHAT-09). `SELFTEST_SCRIPT = ["1", "1", "Здравствуйте! Предлагаю €500k за 20%", "1"]`;
@@ -770,14 +828,14 @@ the executor's.
 | 1 | `CHAT_API_KEY` unset/empty (not `--selftest`) | stop, before loading | `Ошибка конфигурации: не задана переменная CHAT_API_KEY`, 2 | `err` |
 | 2 | a CHAT-01 numeric value is unparseable or outside its required range | stop | `Ошибка конфигурации: неверное значение переменной {NAME}`, 2 | `err` |
 | 3 | `--script` unreadable; `--check-result` without `--script` | stop (the latter before loading) | `Не удалось прочитать файл сценария: {path}` / `Ошибка запуска: --check-result работает только вместе с --script`, 2 | `err` |
-| 4 | load fails, `max_len` mismatch | stop | `Ошибка загрузки моделей: {class}`, then `laya_error=load:{class}` (DEC-10), 2 | `err` |
-| 5 | predict raised, missed 60 s or failed shape validation | retried once, then stop | `Ошибка модели решений: {class, timeout or shape}`, then `laya_error=exception:{class}` / `timeout` / `shape`, 3 | `err` |
+| 4 | load fails, `max_len` or pinned-SHA mismatch | stop | `Ошибка загрузки моделей: {class}`, then `laya_error=load:{class}` (DEC-10), 2 | `err` |
+| 5 | predict raised, missed 60 s or failed shape validation | retried once, then stop | `Ошибка модели решений: {class, oom, timeout or shape}`, then `laya_error=exception:{class}` / `oom` / `timeout` / `shape`, 3 | `err` |
 | 6 | truncated / over budget | DEC-06 retry, then stop | `Ошибка модели решений: truncated`, then `laya_error=truncated`, 3 | `err` |
 | 7 | chat `httpx.HTTPError` (non-2xx, timeout, connect, other transport) | CHAT-06 fallback, CHAT-09 line | fallback line; `chat_error=http_status:<code>` / `timeout` / `connect` / `transport` | `write`; the `chat_error=` line `err` |
 | 8 | 2xx envelope malformed; reply empty, non-JSON / schema-invalid | same | fallback line; `chat_error=api_schema` / `empty_content` / `invalid_json` / `schema` | `write`; the `chat_error=` line `err` |
 | 9 | < 2 valid options | fallback options | the fallback options in the menu | `write` |
 | 10 | invalid move / menu entry; `отказаться` before an own offer | re-prompt, no model call, no turn | `HINT` / menu hint / `REJECT_HINT` | `write` |
-| 11 | EOF | `player_quit` | RESULT, 0 | `write` |
+| 11 | EOF | `player_quit` | `Итог: вы вышли из переговоров.`, RESULT, 0 | `write` |
 | 12 | `KeyboardInterrupt` | stop | `Игра прервана`, 130 | `write` |
 | 13 | `--check-result` violation | message, then RESULT | `RESULT не прошёл проверку: {name}`, 4 | `write` |
 | 14 | `--selftest` RESULT ≠ GAME-07 | SELFTEST FAILED message, then RESULT | `SELFTEST FAILED: {reason}`, 4 | `write` |
@@ -793,8 +851,9 @@ the executor's.
 
 **REQ-V0-TST-01 (MUST)** An autouse `tests/conftest.py` fixture makes
 `socket.socket.connect` raise `RuntimeError`, sets `HF_HUB_OFFLINE=1`.
-`laya_model` is tested with a fake agent (`predict`, `tok`, `cfg`) and a fake
-`laya_module`; `chat` with `httpx.MockTransport`.
+`laya_model` is tested with a fake agent (`predict`, `tok` with `mask_token`, `cfg`) and a fake
+`laya_module` (`PINNED_REVISIONS[REPO] == PINNED_SHA`; the English `load` warns
+`TEMPERATURE_WARNING`, unless a test varies either); `chat` with `httpx.MockTransport`.
 
 **REQ-V0-TST-02 (MUST)** A subprocess imports every `investor_game` module
 (`pkgutil.iter_modules`); `laya` and `torch` stay out of `sys.modules`.
@@ -805,8 +864,8 @@ channel (`T-V0-GAME-21`).
 
 **REQ-V0-TST-04 (MUST)** One test runs `main` with `--script` over the fakes and
 GAME-07's script and pins the banner, `Предложение инвестора: €500k за 35%`,
-the same line with `33%`, `Итог: сделка заключена.`,
-`Условия сделки: €500k за 30%. Оценка компании после сделки: €1.67M.` and GAME-07's RESULT.
+the same line with `33%`, `Итог: сделка заключена.` (exactly once, no `Ваш ход:` after
+it), `Условия сделки: €500k за 30%. Оценка компании после сделки: €1.67M.` and GAME-07's RESULT.
 
 Tests (`(neg)` = a rejection or failure path is the subject):
 
@@ -842,8 +901,13 @@ Tests (`(neg)` = a rejection or failure path is the subject):
   (neg) truncated; `T-V0-DEC-06` (neg) predict_error; `T-V0-DEC-07` (neg) timeout
   (`timeout_s=0.1`, fake sleeps 0.3 s); `T-V0-DEC-08` concurrent (a 3-party
   `threading.Barrier(timeout=2)` in the fake passes); `T-V0-DEC-13` (neg)
-  shape_invalid (an answer key missing; a `choice` outside the criteria →
-  resubmitted once, then `DecisionError("shape")`); `T-V0-DEC-14` (neg)
+  shape_invalid (an answer key missing; a `choice` outside the criteria; `truncated`
+  false with `state_tokens` mismatched, and with it missing → resubmitted once, then
+  `DecisionError("shape")`; over `LayaDecisionModel` with TST-01's fake agent, a
+  STAKEHOLDER `player_message` containing the fake tokenizer's `mask_token` literal
+  counts equal to the fake's reported `state_tokens` (computed as DEC-01's laya line
+  does); the counter reaches the tokenizer only through the injected `encode_text` —
+  no `shape`); `T-V0-DEC-14` (neg)
   attempt_counts (a fake counting `predict` calls per check: persistent truncation →
   exactly 2 TECH calls, then `DecisionError("truncated")`; truncation recovered by
   the DEC-06 re-run → exactly 2, the second result used; timeout → exactly 2, then
@@ -854,8 +918,11 @@ Tests (`(neg)` = a rejection or failure path is the subject):
   started while its first attempt still slept — and after `close()` and a further
   0.6 s still exactly 2, never a third).
 - `test_laya_model.py` (T3): `T-V0-DEC-09` load_calls; `T-V0-DEC-10`
-  warning_filter (temperature dropped, another `RuntimeWarning` kept);
-  `T-V0-DEC-11` (neg) load_failure (raise; `max_len` 256); `T-V0-DEC-12` tokens_predict.
+  warning_filter (the English load's temperature warning recorded, the filter installed
+  only after it: the multilingual load's dropped, another `RuntimeWarning` kept; no
+  English temperature warning → `LoadError`); `T-V0-DEC-11` (neg) load_failure (raise;
+  `max_len` 256; another `PINNED_REVISIONS[REPO]` → `LoadError("AssertionError")`, `load`
+  never called); `T-V0-DEC-12` tokens_predict.
 - `test_chat.py` (T4): `T-V0-CHAT-01` (neg) config (defaults, effort absent vs
   empty, missing key, `CHAT_TIMEOUT_S=abc`; `.env.example`'s uncommented pairs with
   `require_key=False` → effort `low`, the body carries `reasoning`); `T-V0-CHAT-02` request;
@@ -876,7 +943,7 @@ Tests (`(neg)` = a rejection or failure path is the subject):
   `Authorization` or `Bearer`); `T-V0-CHAT-10` (neg) numeric_range (`load_config`:
   `CHAT_TIMEOUT_S` `0` and `-1`, `CHAT_MAX_TOKENS` `0`, `-5` and `1.5` → `ConfigError`
   naming that variable; `CHAT_TIMEOUT_S=0.5` and `CHAT_MAX_TOKENS=1` load).
-- `test_game.py` (T5): `T-V0-GAME-01` transcript; `T-V0-GAME-02` options_display;
+- `test_game.py` (T5): `T-V0-GAME-01` transcript (TST-04); `T-V0-GAME-02` options_display;
   `T-V0-GAME-03` player_accept; `T-V0-GAME-04` (neg) player_reject (before any own
   offer: `REJECT_HINT`, no model call, `decision_turns` unchanged; after one:
   `player_offer` = the last offer, TECH history ends with its
@@ -889,7 +956,8 @@ Tests (`(neg)` = a rejection or failure path is the subject):
   then valid, counts once; `truncated` counts a result its DEC-06 re-run recovered;
   `decision_turns` skips the opening, a player accept, a reject before an own offer); `T-V0-GAME-10`
   show_decisions — GAME-07's turn 1: `[решения] ход 1: accept=1 reaction=counter good_deal=нет ethical_concern=нет tone=neutral → counter; правила: —`;
-  `T-V0-GAME-11` moral (persona 2 + startup 3); `T-V0-GAME-23` option_mapping (`k`
+  `T-V0-GAME-11` moral (persona 2 + startup 3; the outcome line exactly once, no
+  `Ваш ход:` after it); `T-V0-GAME-23` option_mapping (`k`
   = 2 fallback options and 3 valid ones: `1` and `k` → that option's offer is TECH's
   `player_offer`, `k+1` → player accept, `k+2` → `player_quit`, `0` and `k+3` →
   `HINT`, no model call); `T-V0-GAME-24` reject_keeps_offer (a scripted fake decision
@@ -925,7 +993,9 @@ Tests (`(neg)` = a rejection or failure path is the subject):
   `laya_error=load:OSError`; a fake decision model whose TECH `predict` always sleeps
   0.3 s → `laya_error=timeout`, always returns an invalid shape → `shape`, always
   reports truncation → `truncated`, always raises `KeyError("/home/player/x")` →
-  `exception:KeyError`, each exit 3; each run writes exactly one `laya_error=` line,
+  `exception:KeyError`, always raises `MemoryError("/home/player/x")` and
+  `RuntimeError("DefaultCPUAllocator: not enough memory: /home/player/x")` → `oom`, each
+  exit 3; each run writes exactly one `laya_error=` line,
   on `err` only, after the ERR-01 message; no output line holds `/home/` or the
   exception's message text);
   `T-V0-GATE-01` live_script.
@@ -958,13 +1028,22 @@ more after T8's fixes (EC-09); never another. The executor classes a red run by 
 diagnosed cause, not by its exit code — read from the capture: exit code, CHAT-09's
 `chat_error=` and DEC-10's `laya_error=` lines, messages, tracebacks (a procedure, no
 code) — and records class, cause and any `laya_error=` category. Laya decision
-failures are classed by their `laya_error=` category, exhaustively:
+failures are classed by their `laya_error=` category, exhaustively. Classification
+precedence (exits 2 and 3) is: a traceback whose first application frame is under
+`investor_game/` → code defect; otherwise any environment indicator → environment;
+otherwise any code-defect indicator → code defect; otherwise unknown. Exit 4 is
+classified by the violated invariant alone and the precedence sentence does not apply
+to it: `chat_ok` → environment when every `chat_error` line of the run is an
+environment category, otherwise code defect; `laya_checks`, `truncated`,
+`decision_turns` or `outcome` → code defect regardless of any `chat_error` line.
+Indicators:
 - *environment* → blocked (EC-08; no repair, no further live run, the request never
   tuned): chat HTTP 401/402/403/429/5xx (`chat_error=http_status:<code>`), chat
-  `timeout`, `connect`, `transport` or `api_schema`; OOM; `CHAT_API_KEY` missing;
+  `timeout`, `connect`, `transport` or `api_schema`; `CHAT_API_KEY` missing;
   `laya_error=` any `load:*` (missing or corrupt weights, `OSError`,
-  `LocalEntryNotFoundError`, safetensors errors, `MemoryError` at load), `timeout`,
-  `exception:MemoryError`, `exception:OSError`.
+  `LocalEntryNotFoundError`, safetensors errors, `MemoryError` at load;
+  `load:AssertionError`: the installed `laya` is not the locked one, DEC-01), `oom`,
+  `timeout`, `exception:OSError`.
 - *code defect* → one repair cycle (EC-05's ≤ 3 per task, ≤ 8 per run; delegated,
   brief `v0-T7.md`, a `## Repair k` section of T7's prompt, EC-04), gates 1–4 green
   again, then the next allowed live run, T7's second and last: chat HTTP 400/404/422
@@ -972,11 +1051,10 @@ failures are classed by their `laya_error=` category, exhaustively:
   every chat call (T0's probe already proved the model returns JSON for this request
   shape); an unreadable or malformed repo-owned `acceptance/live-script.txt`;
   `laya_error=` `shape`, `truncated`, `exception:TypeError`, `exception:ValueError`,
-  `exception:KeyError`, `exception:AttributeError`, `exception:IndexError`; any
-  traceback from `investor_game/`; exit 4 on the `truncated`, `laya_checks`,
-  `decision_turns` or `outcome` invariant.
-- *unknown* → any other `laya_error=` category: stop (EC-08) with no further live run;
-  the report records the category.
+  `exception:KeyError`, `exception:AttributeError`, `exception:IndexError`; exit 4 on a
+  GAME-06 invariant (above).
+- *unknown* → no indicator matches (e.g. any other `laya_error=` category): stop (EC-08)
+  with no further live run; the report records the category.
 - T7's second live run red for a code defect → stop (EC-08), report written, no third
   T7 run. The T8 live run red → stop (EC-09, EC-08), whatever its class; class, cause
   and any `laya_error=` category recorded.
@@ -992,10 +1070,10 @@ failures are classed by their `laya_error=` category, exhaustively:
 |---|---|---|---|
 | T0 | EC-06 → pass or RPT-02 | §1, §7, §11 `go` | **no** — *commands only* |
 | T1 | `.python-version`, §3.1, `.env.example`, `uv lock` + EC-07, empty modules, stub `main`, `tests/{__init__,conftest}.py`, `test_guards.py` → gates 1–4 | §2, §3.1, §6, §8; `.gitignore:1-6`, `AGENTS.md:15-42` | **yes** — `v0-T1.md` |
-| T2 | `domain`, `parse`, `rules` + tests → gates 1–4 | §4.1–4.3, §6, §8 | **yes** — `v0-T2.md` |
-| T3 | `decision`, `laya_model` + tests → gates 1–4 | §3.2, §3.4, §4.4, §7, §8; T2 signatures (grep) | **yes** — `v0-T3.md` |
-| T4 | `config`, `chat` + tests → gates 1–4 | §3.3, §5, §6, §7, §8; `domain.py` signatures | **yes** — `v0-T4.md` |
-| T5 | `game`, `fakes`, `__main__`, live script + tests → gates 1–4, `SELFTEST OK` | §4.2 PAR-01, §4.3 RUL-06, §4.4 DEC-10, §4.5, §6 SEC-02, §7, §8, App. B; signatures | **yes** — `v0-T5.md` |
+| T2 | `domain`, `parse`, `rules` + tests → gates 1–4 | §2 PKG-05, §4.1–4.3, §6, §8 | **yes** — `v0-T2.md` |
+| T3 | `decision`, `laya_model` + tests → gates 1–4 | §2 PKG-03–05, §3.2, §3.4, §4.4, §7, §8; T2 signatures (grep) | **yes** — `v0-T3.md` |
+| T4 | `config`, `chat` + tests → gates 1–4 | §2 PKG-05, §3.3, §5, §6, §7, §8; `domain.py` signatures | **yes** — `v0-T4.md` |
+| T5 | `game`, `fakes`, `__main__`, live script + tests → gates 1–4, `SELFTEST OK` | §2 PKG-05, §4.2 PAR-01, §4.3 RUL-06, §4.4 DEC-10, §4.5, §6 SEC-02, §7, §8, App. B; signatures | **yes** — `v0-T5.md` |
 | T6 | DOC-01, DOC-02 | §11; `README.md:10-27`, `AGENTS.md:15-33`, `:40-42`, `:118` | **no** — *artefacts only* |
 | T7 | gates 1–4, gate 5 + capture → exit 0; red → GATE-04 | §9 | **no** — *artefacts only* (capture, prompt file: nothing a gate compiles, imports or runs); a gate-5 repair **yes** — `v0-T7.md` |
 | T8 | EC-09 → `review-v0.md`; fixes → gates 1–4 once, the T8 live run iff a fix touched `investor_game/`, `acceptance/live-script.txt`, `pyproject.toml`, `uv.lock`, or `.python-version` | the reviewer's own | **no** — *the task is itself the clean-context review*; fixes **yes** — `v0-T8.md` |
@@ -1042,7 +1120,7 @@ COMMITS; LINKS (spec, prompts, capture, review-v0.md); NOTES
 
 ```text
 STATUS: blocked | stopped
-AT: <task, requirement or gate>; COMMAND: <exact>; EXIT CODE: <n>
+AT: <task, requirement or gate; T0: `key check: …` / `chat probe: …` verbatim (EC-06)>; COMMAND: <exact>; EXIT CODE: <n>
 OUTPUT (last 40 lines, no secrets):
 REPAIR CYCLES USED: task <n>/3, run <n>/8; LIVE RUNS: T7 <n>/2, T8 <n>/1 (class, cause and any `laya_error=` category if red)
 WHAT WAS TRIED / WHY IT DID NOT WORK: <lines>
@@ -1094,7 +1172,7 @@ Bijection with the MUST ids; every `T-V0-*` id of §8 is cited.
 | REQ-V0-RUL-04 | T-V0-RUL-09, T-V0-RUL-11, T-V0-GAME-24 |
 | REQ-V0-RUL-05 | T-V0-RUL-10 |
 | REQ-V0-RUL-06 | T-V0-GAME-03, T-V0-GAME-04; B6, B13 |
-| REQ-V0-DEC-01 | T-V0-DEC-09, T-V0-DEC-11, T-V0-DEC-12; §3.2 re-run |
+| REQ-V0-DEC-01 | T-V0-DEC-09, T-V0-DEC-11, T-V0-DEC-12, T-V0-DEC-13; §3.2 re-run |
 | REQ-V0-DEC-02 | T-V0-DEC-01, T-V0-DEC-02 |
 | REQ-V0-DEC-03 | T-V0-DEC-01 |
 | REQ-V0-DEC-04 | T-V0-DEC-01 |
@@ -1103,7 +1181,7 @@ Bijection with the MUST ids; every `T-V0-*` id of §8 is cited.
 | REQ-V0-DEC-07 | T-V0-DEC-06, T-V0-DEC-07, T-V0-DEC-08, T-V0-DEC-13, T-V0-DEC-14, T-V0-DEC-15 |
 | REQ-V0-DEC-10 | T-V0-DEC-16, T-V0-GAME-21; B9 |
 | REQ-V0-GAME-01 | T-V0-GAME-01, T-V0-GAME-12, T-V0-GAME-21 |
-| REQ-V0-GAME-02 | T-V0-GAME-02, T-V0-GAME-08, T-V0-GAME-23; B11 |
+| REQ-V0-GAME-02 | T-V0-GAME-01, T-V0-GAME-02, T-V0-GAME-08, T-V0-GAME-11, T-V0-GAME-23; B11 |
 | REQ-V0-GAME-03 | T-V0-GAME-06, T-V0-GAME-07, T-V0-GAME-14, T-V0-GAME-15, T-V0-GAME-22 |
 | REQ-V0-GAME-04 | T-V0-GAME-10 |
 | REQ-V0-GAME-05 | T-V0-GAME-09, T-V0-GAME-12, T-V0-GAME-20 |
@@ -1182,7 +1260,23 @@ Feature: the decision model is the brain, code owns the numbers
 
 ## Appendix C — cross-review log
 
-_Opening paragraph pending — the lab writes it when the last round closes._
+**Rounds 1–3 of 3, termination: `round_limit`** — the lab's stop criterion (a round
+without Critical or High findings) was not reached within the round budget: round 3
+still returned five High findings, all accepted and applied here, so no outside model
+has reviewed the round-3 changes themselves. Challenger **OpenAI Codex `gpt-5.6-sol`**,
+called through the lab's cross-review seam with the plan passed by file. 24 findings,
+23 accepted (7 adapted), 1 rejected (a transport artefact of the lab's sanitiser).
+Before round 1 the draft also went through a fresh-context citation + fence audit
+(28 external citations checked, all three fences re-run offline) and 11 lab rulings on
+the contradictions it reported. The spec ends at ≈ 88 KB, above `standards/workflow.md`
+§12's ≈ 80 KB ceiling; it is not split, because no task reads it whole — §10's reading
+map bounds every task's reading and Appendix C (≈ 12 KB) is in no task's map.
+After round 3 the lab ruled on six residuals its applier reported (also unreviewed by
+the challenger): the exit-4 classification is by violated invariant alone (GATE-04);
+`count_state_tokens` mirrors laya's mask-token replacement and tokenizes through
+`laya.common.encode_text` under laya's tokenizer lock (DEC-01, `T-V0-DEC-13`); GAME-02's
+single-outcome rule covers every terminal outcome; §2 PKG-05 joined the T2/T4/T5
+reading cells; and this size note.
 
 ### Round 1 of at most 3 — against 5693eb1; 10 findings, 9 accepted (4 adapted), 1 rejected
 
@@ -1217,3 +1311,16 @@ REQ-V0-CHAT-09.
 
 **Round 2: 8 findings, 8 accepted (2 adapted), 0 rejected.** New requirements:
 REQ-V0-DEC-10.
+
+### Round 3 of at most 3 — against 9dc4ce1; 6 findings, 6 accepted (1 adapted), 0 rejected
+
+| # | sev | REQ(s) | verdict | change |
+|---|---|---|---|---|
+| R3-1 | High | DEC-07, GAME-07, `T-V0-DEC-13` | accepted | Shape validation now also requires `usage["state_tokens"]` to be a non-`bool` int equal to `count_state_tokens(checkpoint, submitted_state)`, a mismatch or a missing field being `shape` that consumes DEC-07's retry, tested by `T-V0-DEC-13` (the selftest fake reports its own count). |
+| R3-2 | High | DEC-01, GATE-04, ERR-01 row 4, TST-01, `T-V0-DEC-11` | accepted | `REPO` and `PINNED_SHA` are now literal module constants needing no `laya` import, and `load_decision_model()` asserts `laya_module.PINNED_REVISIONS[REPO] == PINNED_SHA` before loading, a failure (`load:AssertionError`) being *environment* in GATE-04 and tested by `T-V0-DEC-11`. |
+| R3-3 | High | GATE-04, DEC-07, DEC-10, ERR-01 row 5, `T-V0-DEC-16` | accepted, adapted | GATE-04 now fixes the precedence (`investor_game/` traceback, then environment, then code defect, else unknown), classes exit 4 on any GAME-06 invariant, `chat_ok` included, as a code defect unless every `chat_error` line is an environment category, and replaces the unobservable OOM item with DEC-10's *environment* category `oom` (a predict `MemoryError` or allocator-OOM `RuntimeError`, message never printed), tested by `T-V0-DEC-16`. |
+| R3-4 | High | PKG-04, TST-01, `T-V0-DEC-10` | accepted | PKG-04 now applies only the progress-bar default before `import laya` and installs the narrow `TEMPERATURE_WARNING` filter after verifying the English load's warning and before the multilingual load, as §3.2 does, and `T-V0-DEC-10` asserts that timing. |
+| R3-5 | High | GAME-01, GAME-02, TST-04, `T-V0-GAME-01`, `T-V0-GAME-11` | accepted | GAME-02 now shows the standing offer and `Ваш ход:` only after opening, counter or reject, and after deal or walk-away prints the outcome and any `deal_summary` exactly once with no further prompt (GAME-01 prints no second one), asserted by `T-V0-GAME-01` and `T-V0-GAME-11`. |
+| R3-6 | Med | EC-06, RPT-02 | accepted | T0's chat probe now catches configuration, transport, HTTP, envelope, empty-content, JSON and finish-reason failures and prints one `chat_probe=<sentinel>` line (`ok` on success, else exit 1, no traceback, retry, URL, header or key), which RPT-02's `AT:` quotes as `chat probe: …`. |
+
+**Round 3: 6 findings, 6 accepted (1 adapted), 0 rejected.** New requirements: none.
