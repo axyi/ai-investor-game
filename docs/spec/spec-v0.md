@@ -60,13 +60,16 @@ grep -c '^Status: ready for `go`' docs/spec/spec-v0.md  # 1
 uv --version && uv python find 3.14
 grep -q '^CHAT_API_KEY=.' .env && grep -qx 'CHAT_MODEL=<id>' .env  # exit status only
 set -o pipefail; curl -fsS https://openrouter.ai/api/v1/models | uv run --no-project python -c 'import json,sys; sys.exit(sys.argv[1] not in {m["id"] for m in json.load(sys.stdin)["data"]})' '<id>'
-uv run --no-project --env-file .env python - <<'EOF'   # prints the HTTP status only
+uv run --no-project --env-file .env python - <<'EOF'   # prints the HTTP status or key_check=unreachable only
 import os, urllib.error, urllib.request as r
 req = r.Request("https://openrouter.ai/api/v1/key", headers={"Authorization": "Bearer " + os.environ["CHAT_API_KEY"]})
 try:
     code = r.urlopen(req, timeout=30).status
 except urllib.error.HTTPError as e:
     code = e.code
+except (urllib.error.URLError, TimeoutError, OSError):
+    print("key_check=unreachable")
+    raise SystemExit(1)
 print(code)
 raise SystemExit(0 if code in {200, 404} else 1)
 EOF
@@ -78,10 +81,15 @@ awk '/MemTotal/ {exit !($2 >= 8388608)}' /proc/meminfo && df -Pk "$H" | awk 'NR=
 ```
 
 `[[VERIFY: `GET /api/v1/key` was not reachable at authoring; the check prints only the
-status code (`.status`, or `e.code` of an `HTTPError`), never the key, and exits 0 for
+status code (`.status`, or `e.code` of an `HTTPError`) or, on a `URLError`,
+`TimeoutError` or `OSError` (DNS, TLS, connection, timeout), the sentinel
+`key_check=unreachable` — never the key, never a traceback — and exits 0 for
 {200, 404} and 1 otherwise; rule: 200 = pass; 404 is provisional and passes T0 only if
-the immediately following chat probe succeeds; any other code or failure (DNS,
-timeout) = blocked]]`. The cache alternative needs
+the immediately following chat probe succeeds; any other code or
+`key_check=unreachable` = blocked]]`. A blocked key check's RPT-02 `AT:` names the
+failed condition as the printed line prefixed with `key check: ` —
+`key check: <code>` or `key check: key_check=unreachable` — and quotes no exception
+text. The cache alternative needs
 both the English root (`$D`) and `$D/multilingual`; free disk is measured on `$H`
 (the Hugging Face cache when it exists, else `$HOME`).
 Then the chat probe:
@@ -126,8 +134,8 @@ huggingface-hub 1.33.0, tokenizers 0.23.2) is recorded only.
 GATE-04 classes *environment*): nothing further written or committed — no repair,
 no further live run; RPT-02 ends the session; after T0 the operator re-issues `go`,
 after gate 5 RPT-02's next step names the environment fix. *Stop* (EC-05, EC-07, a
-spec-internal contradiction, T7's second live run red for a *code defect*, a red T8
-live run (EC-09), GATE-04): no later task; gates 1–4 re-run, gate 5 not; `report-v0.md`
+spec-internal contradiction, T7's second live run red for a *code defect*, any gate-5
+run red of GATE-04's *unknown* class, a red T8 live run (EC-09)): no later task; gates 1–4 re-run, gate 5 not; `report-v0.md`
 (`STATUS: stopped`, stage, cause, last 40 output lines), the stop prompt and usage
 rows in one `docs:` commit; then RPT-02.
 
@@ -136,8 +144,9 @@ rows in one `docs:` commit; then RPT-02.
 each finding (severity, `file:line`, must-fix or waived + reason) goes to
 `docs/reports/review-v0.md`. Implement each must-fix finding in its own delegated
 fix commit (brief `v0-T8.md`). After all must-fixes are committed, run gates 1–4
-once. If any fix touched `investor_game/`, run gate 5 once more (the T8 live run,
-GATE-04's budget). Green → continue to T9; red → stop under EC-08. Never run gate 5
+once. If any fix touches `investor_game/`, `acceptance/live-script.txt`,
+`pyproject.toml`, `uv.lock`, or `.python-version`, run gate 5 once more (the T8 live
+run, GATE-04's budget). Green → continue to T9; red → stop under EC-08. Never run gate 5
 once per finding.
 
 **REQ-V0-EC-10 (NON-GOAL)** Git hooks. **REQ-V0-EC-11 (NON-GOAL)** Push or tag by the executor.
@@ -399,7 +408,7 @@ state decides it; MORAL `en` P(true) tutoring .017, battery .051, munitions .637
 | 4 | Осторожный | cautious investor who checks every detail | вежливый, задаёт уточняющие вопросы | 500000 | 300000 / 30 | 20 | 2 | 5 | true | 0.70 |
 
 Each row is a `Persona` with the table's fields; the game's list stays these four
-(a test may build its own `Persona`, RUL-03).
+(a test may build its own `Persona`, RUL-03; RUL-04's `budget` floor applies).
 
 **REQ-V0-DOM-02 (MUST) — `STARTUPS`** (en → MORAL only, the F8 texts):
 
@@ -480,8 +489,10 @@ never changes the reaction. Reasons append to RESULT `overrides` in order.
 
 **REQ-V0-RUL-04 (MUST) — counter-offer.** Equity =
 `max(p.min_equity, o.equity, s.equity − p.step)`; investment =
-`min(p.budget, o.investment)` rounded to 10000; equity a whole percent. `reject`
-keeps `s`. The opening offer is the persona's opening pair.
+`min(p.budget, o.investment) // 10000 * 10000` (floor to €10k, never above the
+budget); equity a whole percent. `Persona` construction raises `ValueError` when
+`budget < 10000` (the four DOM-01 personas all pass). `reject` keeps `s`. The opening
+offer is the persona's opening pair.
 
 **REQ-V0-RUL-05 (MUST) — end states** (`OUTCOME_LINES`, exit 0): `deal`
 `Итог: сделка заключена.`; `walk_away_moral` `Итог: инвестор отказался по этическим соображениям.`;
@@ -529,17 +540,30 @@ truncated result consumes attempt 1 and is retried only here — DEC-07 must not
 it again.
 
 **REQ-V0-DEC-07 (MUST) — parallel runner.** `DecisionRunner` owns one
-`ThreadPoolExecutor(max_workers=3)`; `run` submits the three checks at once,
-waits ≤ `timeout_s` in total, resubmits a failed or late check once — exception,
-timeout and invalid shape use this single retry; all failed checks of a turn are
-retried concurrently with one fresh batch deadline — and a second failure →
+`ThreadPoolExecutor(max_workers=6)`. A turn submits at most three initial checks and,
+after the first batch deadline, at most one retry per failed or late check; therefore
+no more than six calls can be live during timeout recovery. `run` submits the three
+checks at once (first-attempt concurrency stays three), waits ≤ `timeout_s` in total,
+resubmits a failed or late check once — exception, timeout and invalid shape use this
+single retry; all failed checks of a turn are retried concurrently with one fresh
+batch deadline — and a second failure →
 `DecisionError(<class> | "timeout" | "shape")`. Each check has at most two attempts
 in total; a shape-valid truncated result is DEC-06's to retry, never this rule's. A
 returned result that fails shape validation is a failed check; it passes iff
 `answers` holds its check's question keys with §3.2's value types (score:
 `probabilities` over `"0"`…`"4"`, float values; choice: `choice` a criteria key;
 noul: `noul` a float) and `usage["truncated"]` is a bool. `close()` =
-`shutdown(wait=False, cancel_futures=True)`; exit 3 flushes and calls `os._exit(3)`.
+`shutdown(wait=False, cancel_futures=True)`; exit 3 writes ERR-01's message and
+DEC-10's line, flushes and calls `os._exit(3)`.
+
+**REQ-V0-DEC-10 (MUST) — `laya_error` line.** Every exit-2/3 Laya message on `err`
+(ERR-01 rows 4–6) carries ONE sanitized category line after it,
+`laya_error=<category>`, the category in the closed set `load:<ExceptionClass>` (a
+`LoadError`, DEC-01), `timeout`, `shape`, `truncated` (a `DecisionError` of that word,
+DEC-06 / DEC-07), `exception:<ExceptionClass>` (a `DecisionError(<class>)`: `predict`
+raised on both attempts, DEC-07) — the class name only, never the exception's message
+text, which could hold paths under the user's home. GATE-04 classes a red live run by
+it; rows 1–3 of ERR-01 write no such line.
 
 **REQ-V0-DEC-08 (NON-GOAL)** Larger decision models (NeoHorse-Jev-4B, JEV-27B),
 fine-tuning Laya. **REQ-V0-DEC-09 (NON-GOAL)** `min_confidence`.
@@ -553,8 +577,8 @@ fine-tuning Laya. **REQ-V0-DEC-09 (NON-GOAL)** `min_confidence`.
 then the opening, turns, the outcome line, `deal_summary` on a deal, and returns
 RESULT; `main` prints any verdict line (GAME-06's message, GAME-07's `SELFTEST OK` /
 `SELFTEST FAILED`), then RESULT (GAME-05).
-Prompt `> `. Channels: the exit-2 and exit-3 messages (ERR-01 rows 1–6) and CHAT-09's
-`chat_error=` lines go to `err`; everything else — menus, investor lines, hints,
+Prompt `> `. Channels: the exit-2 and exit-3 messages (ERR-01 rows 1–6), DEC-10's
+`laya_error=` lines and CHAT-09's `chat_error=` lines go to `err`; everything else — menus, investor lines, hints,
 fallback lines, the outcome line, RESULT — to `write`.
 
 **REQ-V0-GAME-02 (MUST) — voice, then code's lines.** Each investor turn (opening
@@ -628,8 +652,9 @@ lecturer's optional variants (tg-agent-bot routing, the shell-command gate).
 
 **REQ-V0-CHAT-01 (MUST) — config.** `CHAT_BASE_URL` (`https://openrouter.ai/api/v1`),
 `CHAT_MODEL` (`google/gemini-3.8-flash`), `CHAT_TIMEOUT_S` (float > 0, 30),
-`CHAT_MAX_TOKENS` (int > 0, 2000): absent or empty → default; unparseable →
-`ConfigError` naming it. `CHAT_REASONING_EFFORT`: absent → `low`; present and
+`CHAT_MAX_TOKENS` (int > 0, 2000): absent or empty → default; unparseable or outside
+its required range (`CHAT_TIMEOUT_S` a float > 0; `CHAT_MAX_TOKENS` an integer ≥ 1) →
+`ConfigError` naming it (ERR-01 row 2). `CHAT_REASONING_EFFORT`: absent → `low`; present and
 empty → no `reasoning` field, so §6's
 `.env.example` keeps it and every optional but `CHAT_MODEL` commented out.
 `CHAT_API_KEY` absent or empty → `ConfigError` (unless `require_key=False`).
@@ -638,8 +663,9 @@ No dotenv parser.
 **REQ-V0-CHAT-02 (MUST) — request** = §3.3's `complete`: body `{"model",
 "messages": [system, user], "max_tokens"}` + `"reasoning": {"effort": <v>,
 "exclude": true}` when non-empty; `httpx.Client(timeout=CHAT_TIMEOUT_S)`. An
-`httpx.HTTPError`, or no or empty string content → `ChatError(<category>)`, CHAT-09's
-category.
+`httpx.HTTPError`, a 2xx body that is not JSON or lacks `choices[0].message.content`
+as a string, or an empty content string → `ChatError(<category>)`, CHAT-09's category
+and precedence (`transport` / `api_schema` among them, CHAT-09).
 
 **REQ-V0-CHAT-03 (MUST) — system prompt** (`{now}` = injected clock,
 `%Y-%m-%d %H:%M %z`; a line with an empty placeholder is dropped):
@@ -686,11 +712,15 @@ text `Предлагаю {X} за {Y}%`.
 **REQ-V0-CHAT-09 (MUST) — `chat_error` line.** Every failed chat call (CHAT-06's
 `ChatError` or invalid reply) makes `voice` write ONE sanitized line to `err` —
 always, not only under `--show-decisions`: `chat_error=<category>`, the category in
-the closed set `http_status:<code>` (HTTP status ≥ 400), `timeout`
-(`httpx.TimeoutException`), `connect` (`httpx.ConnectError`), `empty_content` (no
-string content, or an empty one), `invalid_json` (`json.loads` fails), `schema`
-(CHAT-05's `investor_line` / `options` check fails) — never a response body, header,
-URL query or key. A valid reply writes no such line.
+the closed set `http_status:<code>` (a non-2xx status), `timeout`
+(`httpx.TimeoutException`), `connect` (`httpx.ConnectError`), `transport` (any other
+`httpx.HTTPError`: `ReadError`, `WriteError`, `RemoteProtocolError`,
+`TooManyRedirects`, …), `api_schema` (HTTP 2xx whose body is not JSON, or lacks
+`choices[0].message.content` as a string), `empty_content` (the content string is
+empty), `invalid_json` (`json.loads` fails), `schema` (CHAT-05's `investor_line` /
+`options` check fails); precedence, first match wins, is this order, `http_status`
+first and `schema` last — never a response body, header, URL query or key. A valid
+reply writes no such line.
 
 **REQ-V0-CHAT-07 (NON-GOAL)** LM Studio-specific code. **REQ-V0-CHAT-08 (NON-GOAL)** Streaming.
 
@@ -731,30 +761,31 @@ applied to all LLM text before printing and to player input.
 ## 7. Error matrix
 
 **REQ-V0-ERR-01 (MUST)** Closed; rows 1–14 the game's, each on the channel its
-column names (`err` = stderr for the exit-2/3 rows 1–6 and rows 7–8's `chat_error=`
-line, `write` = stdout for the rest, GAME-01), 15–19 the executor's.
+column names (`err` = stderr for the exit-2/3 rows 1–6 with rows 4–6's `laya_error=`
+line and rows 7–8's `chat_error=` line, `write` = stdout for the rest, GAME-01), 15–19
+the executor's.
 
 | # | condition | behaviour | output, exit | channel |
 |---|---|---|---|---|
 | 1 | `CHAT_API_KEY` unset/empty (not `--selftest`) | stop, before loading | `Ошибка конфигурации: не задана переменная CHAT_API_KEY`, 2 | `err` |
-| 2 | a CHAT-01 number unparseable | stop | `Ошибка конфигурации: неверное значение переменной {NAME}`, 2 | `err` |
+| 2 | a CHAT-01 numeric value is unparseable or outside its required range | stop | `Ошибка конфигурации: неверное значение переменной {NAME}`, 2 | `err` |
 | 3 | `--script` unreadable; `--check-result` without `--script` | stop (the latter before loading) | `Не удалось прочитать файл сценария: {path}` / `Ошибка запуска: --check-result работает только вместе с --script`, 2 | `err` |
-| 4 | load fails, `max_len` mismatch | stop | `Ошибка загрузки моделей: {class}`, 2 | `err` |
-| 5 | predict raised, missed 60 s or failed shape validation | retried once, then stop | `Ошибка модели решений: {class, timeout or shape}`, 3 | `err` |
-| 6 | truncated / over budget | DEC-06 retry, then stop | `Ошибка модели решений: truncated`, 3 | `err` |
-| 7 | chat `httpx.HTTPError` (≥ 400, timeout, connect) | CHAT-06 fallback, CHAT-09 line | fallback line; `chat_error=http_status:<code>` / `timeout` / `connect` | `write`; the `chat_error=` line `err` |
-| 8 | reply empty, non-JSON / schema-invalid | same | fallback line; `chat_error=empty_content` / `invalid_json` / `schema` | `write`; the `chat_error=` line `err` |
+| 4 | load fails, `max_len` mismatch | stop | `Ошибка загрузки моделей: {class}`, then `laya_error=load:{class}` (DEC-10), 2 | `err` |
+| 5 | predict raised, missed 60 s or failed shape validation | retried once, then stop | `Ошибка модели решений: {class, timeout or shape}`, then `laya_error=exception:{class}` / `timeout` / `shape`, 3 | `err` |
+| 6 | truncated / over budget | DEC-06 retry, then stop | `Ошибка модели решений: truncated`, then `laya_error=truncated`, 3 | `err` |
+| 7 | chat `httpx.HTTPError` (non-2xx, timeout, connect, other transport) | CHAT-06 fallback, CHAT-09 line | fallback line; `chat_error=http_status:<code>` / `timeout` / `connect` / `transport` | `write`; the `chat_error=` line `err` |
+| 8 | 2xx envelope malformed; reply empty, non-JSON / schema-invalid | same | fallback line; `chat_error=api_schema` / `empty_content` / `invalid_json` / `schema` | `write`; the `chat_error=` line `err` |
 | 9 | < 2 valid options | fallback options | the fallback options in the menu | `write` |
 | 10 | invalid move / menu entry; `отказаться` before an own offer | re-prompt, no model call, no turn | `HINT` / menu hint / `REJECT_HINT` | `write` |
 | 11 | EOF | `player_quit` | RESULT, 0 | `write` |
 | 12 | `KeyboardInterrupt` | stop | `Игра прервана`, 130 | `write` |
 | 13 | `--check-result` violation | message, then RESULT | `RESULT не прошёл проверку: {name}`, 4 | `write` |
 | 14 | `--selftest` RESULT ≠ GAME-07 | SELFTEST FAILED message, then RESULT | `SELFTEST FAILED: {reason}`, 4 | `write` |
-| 15 | T0 check or probe fails | blocked run | RPT-02 | — |
+| 15 | T0 check or probe fails | blocked run | RPT-02 naming the failed condition (EC-06) | — |
 | 16 | T1 lock check fails | stop | RPT-02 | — |
 | 17 | a T7 gate-5 run red, cause *environment* (GATE-04) | blocked (EC-08): no repair, no further live run; request never tuned | RPT-02 | — |
 | 18 | T7's first live run red, cause *code defect* | one repair cycle, gates 1–4, T7's second and last live run (GATE-04) | — | — |
-| 19 | T7's second live run red, *code defect*; or the T8 live run red (EC-09) | stop (EC-08), no further run | `report-v0.md`, RPT-02 | — |
+| 19 | T7's second live run red, *code defect*; any gate-5 run red, *unknown* (GATE-04); or the T8 live run red (EC-09) | stop (EC-08), no further run | `report-v0.md`, RPT-02 | — |
 
 ---
 
@@ -801,7 +832,9 @@ Tests (`(neg)` = a rejection or failure path is the subject):
   → `walk_away_patience`; a test-only `Persona` with patience 20, built in the
   test: decision turn 9 goes on, turn 10 → `max_turns`); `T-V0-RUL-09` counter_offer — persona 1, `s`
   500000/35: `o` 500000/20 → 500000/33, `o` 900000/40 → 700000/40;
-  `T-V0-RUL-10` outcome_lines.
+  `T-V0-RUL-10` outcome_lines; `T-V0-RUL-11` (neg) counter_floor (a test-only
+  `Persona` with persona 1's fields but `budget` 655000, `s` 500000/35: `o`
+  900000/40 → counter 650000/40; `budget` 9999 → `ValueError`).
 - `test_decision.py` (T3): `T-V0-DEC-01` questions (§3.2 literals; one-key states,
   no DOM-01 descriptor word); `T-V0-DEC-02` tech_state; `T-V0-DEC-03` reading —
   `{"0": .42, "1": .06, "2": .32, "3": .1, "4": .1}`, score 1.71 → 0; tie →
@@ -815,7 +848,11 @@ Tests (`(neg)` = a rejection or failure path is the subject):
   exactly 2 TECH calls, then `DecisionError("truncated")`; truncation recovered by
   the DEC-06 re-run → exactly 2, the second result used; timeout → exactly 2, then
   `DecisionError("timeout")`; invalid shape → exactly 2, then
-  `DecisionError("shape")`; never a third call).
+  `DecisionError("shape")`; never a third call); `T-V0-DEC-15` (neg) retry_capacity
+  (`timeout_s=0.1`, all three checks' fakes sleep 0.3 s on every call: when `run`
+  raises `DecisionError("timeout")` each check has started exactly 2 calls — its retry
+  started while its first attempt still slept — and after `close()` and a further
+  0.6 s still exactly 2, never a third).
 - `test_laya_model.py` (T3): `T-V0-DEC-09` load_calls; `T-V0-DEC-10`
   warning_filter (temperature dropped, another `RuntimeWarning` kept);
   `T-V0-DEC-11` (neg) load_failure (raise; `max_len` 256); `T-V0-DEC-12` tokens_predict.
@@ -830,7 +867,15 @@ Tests (`(neg)` = a rejection or failure path is the subject):
   `http_status:500`, `ReadTimeout` → `timeout`, `ConnectError` → `connect`, content
   `""` → `empty_content`, `not json` → `invalid_json`, `{"options": []}` → `schema`,
   each exactly one `err` line; a valid reply → none; no line holds the key,
-  `Authorization` or `Bearer`).
+  `Authorization` or `Bearer`); `T-V0-CHAT-09` (neg) envelope_errors
+  (`HttpChatModel` on `httpx.MockTransport`, then `voice` with an injected `err`: a
+  handler raising `httpx.RemoteProtocolError` → `ChatError("transport")`,
+  `chat_error=transport`; HTTP 200 with body `not json`, with `{"choices": []}` and
+  with `{"choices": [{"message": {}}]}` → `api_schema`; a 500 whose body is not JSON
+  → `http_status:500` (precedence); each exactly one `err` line, none holding the key,
+  `Authorization` or `Bearer`); `T-V0-CHAT-10` (neg) numeric_range (`load_config`:
+  `CHAT_TIMEOUT_S` `0` and `-1`, `CHAT_MAX_TOKENS` `0`, `-5` and `1.5` → `ConfigError`
+  naming that variable; `CHAT_TIMEOUT_S=0.5` and `CHAT_MAX_TOKENS=1` load).
 - `test_game.py` (T5): `T-V0-GAME-01` transcript; `T-V0-GAME-02` options_display;
   `T-V0-GAME-03` player_accept; `T-V0-GAME-04` (neg) player_reject (before any own
   offer: `REJECT_HINT`, no model call, `decision_turns` unchanged; after one:
@@ -847,7 +892,14 @@ Tests (`(neg)` = a rejection or failure path is the subject):
   `T-V0-GAME-11` moral (persona 2 + startup 3); `T-V0-GAME-23` option_mapping (`k`
   = 2 fallback options and 3 valid ones: `1` and `k` → that option's offer is TECH's
   `player_offer`, `k+1` → player accept, `k+2` → `player_quit`, `0` and `k+3` →
-  `HINT`, no model call).
+  `HINT`, no model call); `T-V0-GAME-24` reject_keeps_offer (a scripted fake decision
+  model, persona 1, startup 1: the player offers `€500k за 20%`, turn 1's TECH
+  `reaction` is `reject` → the next menu's authoritative line is
+  `Предложение инвестора: €500k за 35%`, round 1's history entry is
+  `Round 1: player offered €500k for 20%; investor kept €500k for 35%`; the player then
+  offers `€500k за 22%` → turn 2's recorded TECH state holds the fact
+  `The offered equity 22% is far below the investor's current ask of 35%.` and its
+  history ends with that round-1 entry).
 - `test_cli.py` (T5): `T-V0-GAME-12` selftest (and a failing chat → 4; `SELFTEST OK`
   / `SELFTEST FAILED` precede RESULT, the last stdout line);
   `T-V0-GAME-13`, `T-V0-GAME-17`, `T-V0-GAME-18`, `T-V0-GAME-19`, `T-V0-GAME-20`
@@ -861,10 +913,21 @@ Tests (`(neg)` = a rejection or failure path is the subject):
   `T-V0-GAME-15` (neg) errors (exit 2, 3); `T-V0-GAME-16` (neg) script;
   `T-V0-GAME-21` (neg) channels (each ERR-01 row 1–14 triggered through `main`
   with injected `write` / `err` over fakes, rows 5–6 with `os._exit` monkeypatched
-  to raise: its output on its row's channel only — rows 7–8 the fallback on `write`,
-  the `chat_error=` line on `err`); `T-V0-GAME-22` (neg) check_result_needs_script
+  to raise: its output on its row's channel only — rows 4–6 with DEC-10's
+  `laya_error=` line on `err` too, rows 7–8 the fallback on `write`, the
+  `chat_error=` line on `err`); `T-V0-GAME-22` (neg) check_result_needs_script
   (`--check-result` without `--script`, a valid env → exit 2, the row-3 message on
   `err` naming both flags, the injected `load_decision` never called);
+  `T-V0-DEC-16` (neg) laya_error (through `main` with injected `write` / `err`,
+  `os._exit` monkeypatched to raise, `DecisionRunner`'s default `timeout_s`
+  monkeypatched to 0.1: `load_decision` = `load_decision_model` over a fake
+  `laya_module` whose `load` raises `OSError("/home/player/.cache/hf")` → exit 2,
+  `laya_error=load:OSError`; a fake decision model whose TECH `predict` always sleeps
+  0.3 s → `laya_error=timeout`, always returns an invalid shape → `shape`, always
+  reports truncation → `truncated`, always raises `KeyError("/home/player/x")` →
+  `exception:KeyError`, each exit 3; each run writes exactly one `laya_error=` line,
+  on `err` only, after the ERR-01 message; no output line holds `/home/` or the
+  exception's message text);
   `T-V0-GATE-01` live_script.
 
 ---
@@ -893,23 +956,30 @@ A red run → GATE-04.
 two gate-5 runs in T7 (the first, plus one after a code-defect repair) and at most one
 more after T8's fixes (EC-09); never another. The executor classes a red run by its
 diagnosed cause, not by its exit code — read from the capture: exit code, CHAT-09's
-`chat_error=` lines, messages, tracebacks (a procedure, no code) — and records class
-and cause:
+`chat_error=` and DEC-10's `laya_error=` lines, messages, tracebacks (a procedure, no
+code) — and records class, cause and any `laya_error=` category. Laya decision
+failures are classed by their `laya_error=` category, exhaustively:
 - *environment* → blocked (EC-08; no repair, no further live run, the request never
   tuned): chat HTTP 401/402/403/429/5xx (`chat_error=http_status:<code>`), chat
-  `timeout` or `connect`; a Laya load failing on missing cached files with no
-  network; OOM; `CHAT_API_KEY` missing.
+  `timeout`, `connect`, `transport` or `api_schema`; OOM; `CHAT_API_KEY` missing;
+  `laya_error=` any `load:*` (missing or corrupt weights, `OSError`,
+  `LocalEntryNotFoundError`, safetensors errors, `MemoryError` at load), `timeout`,
+  `exception:MemoryError`, `exception:OSError`.
 - *code defect* → one repair cycle (EC-05's ≤ 3 per task, ≤ 8 per run; delegated,
   brief `v0-T7.md`, a `## Repair k` section of T7's prompt, EC-04), gates 1–4 green
-  again, then T7's second and last live run: chat HTTP 400/404/422 (malformed
-  request / wrong path); `empty_content`, `invalid_json` or `schema` on every chat
-  call (T0's probe already proved the model returns JSON for this request shape); an
-  unreadable or malformed repo-owned `acceptance/live-script.txt`; a Laya `TypeError`
-  / `ValueError` from our own call arguments; any traceback from `investor_game/`;
-  exit 4 on the `truncated`, `laya_checks`, `decision_turns` or `outcome` invariant.
+  again, then the next allowed live run, T7's second and last: chat HTTP 400/404/422
+  (malformed request / wrong path); `empty_content`, `invalid_json` or `schema` on
+  every chat call (T0's probe already proved the model returns JSON for this request
+  shape); an unreadable or malformed repo-owned `acceptance/live-script.txt`;
+  `laya_error=` `shape`, `truncated`, `exception:TypeError`, `exception:ValueError`,
+  `exception:KeyError`, `exception:AttributeError`, `exception:IndexError`; any
+  traceback from `investor_game/`; exit 4 on the `truncated`, `laya_checks`,
+  `decision_turns` or `outcome` invariant.
+- *unknown* → any other `laya_error=` category: stop (EC-08) with no further live run;
+  the report records the category.
 - T7's second live run red for a code defect → stop (EC-08), report written, no third
-  T7 run. The T8 live run red → stop (EC-09, EC-08), whatever its class; class and
-  cause recorded.
+  T7 run. The T8 live run red → stop (EC-09, EC-08), whatever its class; class, cause
+  and any `laya_error=` category recorded.
 
 ---
 
@@ -925,10 +995,10 @@ and cause:
 | T2 | `domain`, `parse`, `rules` + tests → gates 1–4 | §4.1–4.3, §6, §8 | **yes** — `v0-T2.md` |
 | T3 | `decision`, `laya_model` + tests → gates 1–4 | §3.2, §3.4, §4.4, §7, §8; T2 signatures (grep) | **yes** — `v0-T3.md` |
 | T4 | `config`, `chat` + tests → gates 1–4 | §3.3, §5, §6, §7, §8; `domain.py` signatures | **yes** — `v0-T4.md` |
-| T5 | `game`, `fakes`, `__main__`, live script + tests → gates 1–4, `SELFTEST OK` | §4.2 PAR-01, §4.3 RUL-06, §4.5, §6 SEC-02, §7, §8, App. B; signatures | **yes** — `v0-T5.md` |
+| T5 | `game`, `fakes`, `__main__`, live script + tests → gates 1–4, `SELFTEST OK` | §4.2 PAR-01, §4.3 RUL-06, §4.4 DEC-10, §4.5, §6 SEC-02, §7, §8, App. B; signatures | **yes** — `v0-T5.md` |
 | T6 | DOC-01, DOC-02 | §11; `README.md:10-27`, `AGENTS.md:15-33`, `:40-42`, `:118` | **no** — *artefacts only* |
 | T7 | gates 1–4, gate 5 + capture → exit 0; red → GATE-04 | §9 | **no** — *artefacts only* (capture, prompt file: nothing a gate compiles, imports or runs); a gate-5 repair **yes** — `v0-T7.md` |
-| T8 | EC-09 → `review-v0.md`; fixes → gates 1–4 once, the T8 live run iff a fix touched `investor_game/` | the reviewer's own | **no** — *the task is itself the clean-context review*; fixes **yes** — `v0-T8.md` |
+| T8 | EC-09 → `review-v0.md`; fixes → gates 1–4 once, the T8 live run iff a fix touched `investor_game/`, `acceptance/live-script.txt`, `pyproject.toml`, `uv.lock`, or `.python-version` | the reviewer's own | **no** — *the task is itself the clean-context review*; fixes **yes** — `v0-T8.md` |
 | T9 | RPT-01, -03, -04 | §11; `docs/llm-usage.md:1-8`, `AGENTS.md:133-142`, `README.md:29-34` | **no** — *artefacts only* |
 
 ---
@@ -962,7 +1032,7 @@ the `Context boundaries` bullet (`:40-42`) becomes exactly:
 STATUS: done | stopped; SPEC: <bytes> B ≈ <÷ 4> tokens (wc -c); MODELS: <executor> (<harness>), reviewer <model>; CONSTRAINTS: <self-imposed>
 FIRST RUN: yes | no; PROMPTS: <n>, auxiliary quality; BUGS: found / fixed / left, why
 T0: <check → result>; LOCK: <EC-07; version drift>; CARVE-OUT: <id → red | green>
-GATES: <task → gate → exit, tests>; GATE 5 RESULT: <line per live run; class and cause if red>; LIVE RUNS: T7 <n>/2, T8 <n>/1; REPAIR CYCLES: <task n/3; run n/8>
+GATES: <task → gate → exit, tests>; GATE 5 RESULT: <line per live run; class, cause and any `laya_error=` category if red>; LIVE RUNS: T7 <n>/2, T8 <n>/1; REPAIR CYCLES: <task n/3; run n/8>
 TOKENS in/out; COST (currency or public-API estimate + source); WALL CLOCK
 DELEGATION RECORD: | task | commit | delegated? | brief path or exemption (verbatim) | map vs actual |
 COMMITS; LINKS (spec, prompts, capture, review-v0.md); NOTES
@@ -974,7 +1044,7 @@ COMMITS; LINKS (spec, prompts, capture, review-v0.md); NOTES
 STATUS: blocked | stopped
 AT: <task, requirement or gate>; COMMAND: <exact>; EXIT CODE: <n>
 OUTPUT (last 40 lines, no secrets):
-REPAIR CYCLES USED: task <n>/3, run <n>/8; LIVE RUNS: T7 <n>/2, T8 <n>/1 (class and cause if red)
+REPAIR CYCLES USED: task <n>/3, run <n>/8; LIVE RUNS: T7 <n>/2, T8 <n>/1 (class, cause and any `laya_error=` category if red)
 WHAT WAS TRIED / WHY IT DID NOT WORK: <lines>
 RECOMMENDED NEXT STEP: <what the operator decides>
 ```
@@ -1019,9 +1089,9 @@ Bijection with the MUST ids; every `T-V0-*` id of §8 is cited.
 | REQ-V0-PAR-02 | T-V0-PAR-02 |
 | REQ-V0-PAR-03 | T-V0-PAR-03, T-V0-PAR-04, T-V0-GAME-05; B7 |
 | REQ-V0-RUL-01 | T-V0-RUL-01 |
-| REQ-V0-RUL-02 | T-V0-RUL-02, T-V0-GAME-04 |
+| REQ-V0-RUL-02 | T-V0-RUL-02, T-V0-GAME-04, T-V0-GAME-24 |
 | REQ-V0-RUL-03 | T-V0-RUL-03, T-V0-RUL-04, T-V0-RUL-05, T-V0-RUL-06, T-V0-RUL-07, T-V0-RUL-08, T-V0-GAME-11; B1–B5 |
-| REQ-V0-RUL-04 | T-V0-RUL-09 |
+| REQ-V0-RUL-04 | T-V0-RUL-09, T-V0-RUL-11, T-V0-GAME-24 |
 | REQ-V0-RUL-05 | T-V0-RUL-10 |
 | REQ-V0-RUL-06 | T-V0-GAME-03, T-V0-GAME-04; B6, B13 |
 | REQ-V0-DEC-01 | T-V0-DEC-09, T-V0-DEC-11, T-V0-DEC-12; §3.2 re-run |
@@ -1030,7 +1100,8 @@ Bijection with the MUST ids; every `T-V0-*` id of §8 is cited.
 | REQ-V0-DEC-04 | T-V0-DEC-01 |
 | REQ-V0-DEC-05 | T-V0-DEC-03 |
 | REQ-V0-DEC-06 | T-V0-DEC-04, T-V0-DEC-05, T-V0-DEC-14; B9 |
-| REQ-V0-DEC-07 | T-V0-DEC-06, T-V0-DEC-07, T-V0-DEC-08, T-V0-DEC-13, T-V0-DEC-14 |
+| REQ-V0-DEC-07 | T-V0-DEC-06, T-V0-DEC-07, T-V0-DEC-08, T-V0-DEC-13, T-V0-DEC-14, T-V0-DEC-15 |
+| REQ-V0-DEC-10 | T-V0-DEC-16, T-V0-GAME-21; B9 |
 | REQ-V0-GAME-01 | T-V0-GAME-01, T-V0-GAME-12, T-V0-GAME-21 |
 | REQ-V0-GAME-02 | T-V0-GAME-02, T-V0-GAME-08, T-V0-GAME-23; B11 |
 | REQ-V0-GAME-03 | T-V0-GAME-06, T-V0-GAME-07, T-V0-GAME-14, T-V0-GAME-15, T-V0-GAME-22 |
@@ -1039,24 +1110,24 @@ Bijection with the MUST ids; every `T-V0-*` id of §8 is cited.
 | REQ-V0-GAME-06 | T-V0-GAME-13, T-V0-GAME-17, T-V0-GAME-18, T-V0-GAME-19, T-V0-GAME-20, T-V0-GAME-22; B10 |
 | REQ-V0-GAME-07 | T-V0-GAME-12 |
 | REQ-V0-GAME-08 | T-V0-GAME-16, T-V0-GATE-01 |
-| REQ-V0-CHAT-01 | T-V0-CHAT-01 |
-| REQ-V0-CHAT-02 | T-V0-CHAT-02, T-V0-CHAT-08; §3.3 re-run |
+| REQ-V0-CHAT-01 | T-V0-CHAT-01, T-V0-CHAT-10 |
+| REQ-V0-CHAT-02 | T-V0-CHAT-02, T-V0-CHAT-08, T-V0-CHAT-09; §3.3 re-run |
 | REQ-V0-CHAT-03 | T-V0-CHAT-03 |
 | REQ-V0-CHAT-04 | T-V0-CHAT-04 |
 | REQ-V0-CHAT-05 | T-V0-CHAT-05 |
 | REQ-V0-CHAT-06 | T-V0-CHAT-05, T-V0-CHAT-06; B8 |
-| REQ-V0-CHAT-09 | T-V0-CHAT-08, T-V0-GAME-21 |
-| REQ-V0-SEC-01 | T-V0-SEC-01, T-V0-CHAT-07, T-V0-CHAT-08 |
+| REQ-V0-CHAT-09 | T-V0-CHAT-08, T-V0-CHAT-09, T-V0-GAME-21 |
+| REQ-V0-SEC-01 | T-V0-SEC-01, T-V0-CHAT-07, T-V0-CHAT-08, T-V0-CHAT-09 |
 | REQ-V0-SEC-02 | T-V0-GAME-08; B11 |
 | REQ-V0-SEC-03 | T-V0-SEC-02 |
-| REQ-V0-ERR-01 | rows 1–14: T-V0-GAME-14; T-V0-CHAT-01; T-V0-GAME-16, T-V0-GAME-22; T-V0-DEC-11, T-V0-GAME-15; T-V0-DEC-06, T-V0-DEC-07, T-V0-DEC-13, T-V0-DEC-14; T-V0-DEC-05, T-V0-DEC-14; T-V0-CHAT-06, T-V0-CHAT-08 (7–8); T-V0-CHAT-05; T-V0-GAME-05, T-V0-GAME-04, T-V0-PAR-04; T-V0-GAME-06; T-V0-GAME-07; T-V0-GAME-13, T-V0-GAME-17, T-V0-GAME-18, T-V0-GAME-19, T-V0-GAME-20; T-V0-GAME-12; channels T-V0-GAME-21; 15–19 recorded |
+| REQ-V0-ERR-01 | rows 1–14: T-V0-GAME-14; T-V0-CHAT-01, T-V0-CHAT-10; T-V0-GAME-16, T-V0-GAME-22; T-V0-DEC-11, T-V0-GAME-15, T-V0-DEC-16; T-V0-DEC-06, T-V0-DEC-07, T-V0-DEC-13, T-V0-DEC-14, T-V0-DEC-15, T-V0-DEC-16; T-V0-DEC-05, T-V0-DEC-14, T-V0-DEC-16; T-V0-CHAT-06, T-V0-CHAT-08, T-V0-CHAT-09 (7–8); T-V0-CHAT-05; T-V0-GAME-05, T-V0-GAME-04, T-V0-PAR-04; T-V0-GAME-06; T-V0-GAME-07; T-V0-GAME-13, T-V0-GAME-17, T-V0-GAME-18, T-V0-GAME-19, T-V0-GAME-20; T-V0-GAME-12; channels T-V0-GAME-21; 15–19 recorded |
 | REQ-V0-TST-01 | T-V0-TST-01 |
 | REQ-V0-TST-02 | T-V0-TST-02 |
 | REQ-V0-TST-03 | review; this table |
 | REQ-V0-TST-04 | T-V0-GAME-01 |
 | REQ-V0-GATE-01 | GATES |
 | REQ-V0-GATE-02 | `docs/assets/acceptance-v0.txt` |
-| REQ-V0-GATE-04 | report `GATE 5 RESULT` / `LIVE RUNS` (T7 ≤ 2, T8 ≤ 1; class and cause of a red run); REPAIR CYCLES |
+| REQ-V0-GATE-04 | report `GATE 5 RESULT` / `LIVE RUNS` (T7 ≤ 2, T8 ≤ 1; class, cause and any `laya_error=` category of a red run); REPAIR CYCLES |
 | REQ-V0-DOC-01 | T6 `git show` |
 | REQ-V0-DOC-02 | `grep -cF -e '--check-result' -e "grep -q '^NAME=.'" AGENTS.md` = 2 |
 | REQ-V0-RPT-01 | `report-v0.md` |
@@ -1094,7 +1165,7 @@ Feature: the decision model is the brain, code owns the numbers
     Then the counter fallback line and options
   Scenario: B9 truncation persists
     Given every TECH result truncated
-    Then exit 3
+    Then exit 3, one "laya_error=truncated" line on err
   Scenario: B10 check-result red
     Given a failing chat, --script with GAME-07's script and --check-result
     Then chat_ok 0, the violation message, then RESULT, exit 4
@@ -1130,3 +1201,19 @@ _Opening paragraph pending — the lab writes it when the last round closes._
 
 **Round 1: 10 findings, 9 accepted (4 adapted), 1 rejected.** New requirements:
 REQ-V0-CHAT-09.
+
+### Round 2 of at most 3 — against bf1cd9a; 8 findings, 8 accepted (2 adapted), 0 rejected
+
+| # | sev | REQ(s) | verdict | change |
+|---|---|---|---|---|
+| R2-1 | Crit | DEC-07, `T-V0-DEC-07`, `T-V0-DEC-14`, `T-V0-DEC-15` (new) | accepted | `DecisionRunner` now owns one `ThreadPoolExecutor(max_workers=6)` — at most three initial checks per turn and, after the first batch deadline, at most one retry per failed or late check, so no more than six calls are live during timeout recovery while first-attempt concurrency stays three (§3.2's measured three-thread proof unchanged) — and `T-V0-DEC-15` asserts that with all three initial calls past the deadline all three retries start and no third attempt occurs. |
+| R2-2 | High | CHAT-02, CHAT-09, ERR-01 rows 7–8, GATE-04, `T-V0-CHAT-09` (new) | accepted | CHAT-09's closed set now adds `transport` (any other `httpx.HTTPError`) and `api_schema` (an HTTP 2xx body that is not JSON or lacks `choices[0].message.content` as a string) under the first-match precedence `http_status:<code>` (non-2xx) → `timeout` → `connect` → `transport` → `api_schema` → `empty_content` (now only an empty content string) → `invalid_json` → `schema`, both new categories named in CHAT-02 and ERR-01 rows 7–8, classed *environment* by GATE-04 and tested on `httpx.MockTransport` by `T-V0-CHAT-09`. |
+| R2-3 | High | DEC-10 (new), GATE-04, EC-08, GAME-01, ERR-01 rows 4–6 and 19, RPT-01, RPT-02, `T-V0-DEC-16` (new), `T-V0-GAME-21`, B9 | accepted, adapted | Every exit-2/3 Laya message on `err` now carries one sanitized `laya_error=<category>` line from the closed set `load:<ExceptionClass>`, `timeout`, `shape`, `truncated`, `exception:<ExceptionClass>` (class name only, DEC-10), which GATE-04 classes exhaustively — *environment* for any `load:*`, `timeout`, `exception:MemoryError`, `exception:OSError`; *code defect* for `shape`, `truncated`, `exception:TypeError` / `ValueError` / `KeyError` / `AttributeError` / `IndexError` or an `investor_game/` traceback; any other category *unknown*, a stop with no further live run and the category recorded in the report — and `T-V0-DEC-16` produces each category from its fake failure with no path or message text leaking. |
+| R2-4 | High | EC-09, §10 T8 row | accepted | EC-09 and the T8 row now run gate 5 once more if any fix touches `investor_game/`, `acceptance/live-script.txt`, `pyproject.toml`, `uv.lock`, or `.python-version`. |
+| R2-5 | Med | CHAT-01, ERR-01 row 2, `T-V0-CHAT-10` (new) | accepted | ERR-01 row 2's condition now reads "a CHAT-01 numeric value is unparseable or outside its required range" (CHAT-01: `CHAT_TIMEOUT_S` a float > 0; `CHAT_MAX_TOKENS` an integer ≥ 1) with the same Russian message, and `T-V0-CHAT-10` tests zero and negative values of both and `CHAT_MAX_TOKENS=1.5`. |
+| R2-6 | Med | RUL-04, DOM-01, `T-V0-RUL-11` (new) | accepted, adapted | The counter-offer investment is now `min(p.budget, o.investment) // 10000 * 10000` (floor to €10k, never above the budget) and `Persona` construction raises `ValueError` when `budget < 10000`, `T-V0-RUL-11` pins budget 655000 → counter 650000, and the worked examples (`T-V0-RUL-09`, B3, §3.2's history, GAME-07's RESULT, TST-04) were rechecked and stay unchanged, the four budgets being multiples of 10000. |
+| R2-7 | Med | EC-06, ERR-01 row 15 | accepted | T0's key check now also catches `urllib.error.URLError`, `TimeoutError` and `OSError`, printing the sentinel `key_check=unreachable` and exiting 1 without a traceback, and the VERIFY text and the blocker's `AT:` failed condition (`key check: <code>` / `key check: key_check=unreachable`) use those same words. |
+| R2-8 | Low | RUL-02, RUL-04, `T-V0-GAME-24` (new) | accepted | The new game test `T-V0-GAME-24` pins that a TECH `reject` keeps the standing offer, writes `Round 1: player offered €500k for 20%; investor kept €500k for 35%`, and shows €500k for 35% in the next menu's `Предложение инвестора:` line and in turn 2's TECH fact and history. |
+
+**Round 2: 8 findings, 8 accepted (2 adapted), 0 rejected.** New requirements:
+REQ-V0-DEC-10.
