@@ -47,13 +47,13 @@ ENV_EXAMPLE = [
 ]
 
 
-def test_offline():
+def test_t_v0_tst_01_offline():
     with socket.socket() as sock, pytest.raises(RuntimeError):
         sock.connect(("127.0.0.1", 9))
     assert os.environ["HF_HUB_OFFLINE"] == "1"
 
 
-def test_import_isolation():
+def test_t_v0_tst_02_import_isolation():
     proc = subprocess.run(
         [sys.executable, "-c", IMPORT_ALL],
         cwd=ROOT,
@@ -67,7 +67,7 @@ def test_import_isolation():
     assert report["leaked"] == []
 
 
-def test_env_example():
+def test_t_v0_sec_01_env_example():
     path = ROOT / ".env.example"
     assert path.is_file()
     assert path.read_text().splitlines() == ENV_EXAMPLE
