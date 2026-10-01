@@ -418,6 +418,22 @@ def test_t_v0_game_11_moral():
     # persona 1 and the same startup: no veto (B2)
     result, out, _, _, _ = play_lines(["1", "3", "€500k за 20%"])
     assert result["overrides"] == [] and result["outcome"] == "player_quit"
+    # B5 (RUL-03 R5 / R6) through the game: persona 3 has patience 3 and a rude message costs 2,
+    # so only patience carried from turn 1 (3 -> 1) lets turn 2 end `walk_away_patience`
+    rude = "Вы жадный старик, €500k за 20% или проваливайте."
+    result, out, _, model, _ = play_lines(["3", "1", rude, rude], show=True)
+    outcome = OUTCOME_LINES["walk_away_patience"]
+    ends_once(out, outcome)
+    assert out[-1] == outcome
+    assert result["outcome"] == "walk_away_patience" and result["decision_turns"] == 2
+    assert result["overrides"] == ["rude", "rude", "patience"]
+    tech = model.states("tech")
+    assert "Rounds of patience left: 3." in tech[0]["facts"]
+    assert "Rounds of patience left: 1." in tech[1]["facts"]
+    assert any(
+        "ход 2:" in x and "tone=rude → walk_away_patience; правила: rude, patience" in x
+        for x in out
+    )
 
 
 @pytest.mark.parametrize(
