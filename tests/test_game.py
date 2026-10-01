@@ -2,6 +2,7 @@ import copy
 import json
 import threading
 from collections import Counter
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -99,6 +100,17 @@ class Scripted(Recorder):
         return self.behave(name, attempt, super().predict(checkpoint, state, questions))
 
 
+class Reporting(DecisionRunner):
+    """A real runner whose turns report the next number of used results (`Decisions.checks`)."""
+
+    def __init__(self, model, reports):
+        super().__init__(model, timeout_s=5.0)
+        self.reports = iter(reports)
+
+    def run(self, tech, moral, stake):
+        return replace(super().run(tech, moral, stake), checks=next(self.reports))
+
+
 class CountingChat(FakeChatModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -129,11 +141,11 @@ def reply(line="Ответ.", options=((500000, 30), (500000, 25))):
     return json.dumps({"investor_line": line, "options": items}, ensure_ascii=False)
 
 
-def play_lines(lines, *, model=None, chat=None, show=False):
+def play_lines(lines, *, model=None, chat=None, show=False, runner=None):
     """Run `play` over a real DecisionRunner; returns (result, written, errors, model, chat)."""
     model = Recorder() if model is None else model
     chat = CountingChat() if chat is None else chat
-    runner = DecisionRunner(model, timeout_s=5.0)
+    runner = DecisionRunner(model, timeout_s=5.0) if runner is None else runner
     feed = iter(lines)
     written, errors = [], []
     try:
@@ -349,6 +361,14 @@ def test_t_v0_game_09_result_counters():
     assert result["decision_turns"] == 1 and result["laya_checks"] == 3
     assert result["outcome"] == "deal"
     assert result["chat_ok"] == 2  # the opening and turn 1; the accept shortcut has no chat
+
+    # `laya_checks` adds what the runner reports per turn (+1 per used result, never a constant 3)
+    model = Recorder()
+    runner = Reporting(model, [3, 2])
+    result, _, _, _, _ = play_lines(
+        ["1", "1", "€500k за 20%", "€500k за 25%"], model=model, runner=runner
+    )
+    assert result["decision_turns"] == 2 and result["laya_checks"] == 5
 
 
 def test_t_v0_game_10_show_decisions():

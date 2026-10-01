@@ -25,7 +25,6 @@ from investor_game.rules import (
     repeat_entry,
 )
 
-_CHECKS = ("tech", "moral", "stakeholder")  # one shape-valid result per check (GAME-05)
 _YES_NO = {True: "да", False: "нет"}
 
 
@@ -177,7 +176,7 @@ class _Session:
             stakeholder_state(text),
         )
         self.result["decision_turns"] = turn
-        self.result["laya_checks"] += len(_CHECKS)
+        self.result["laya_checks"] += decisions.checks
         self.result["truncated"] += decisions.truncated
         ruling = aggregate(
             persona,

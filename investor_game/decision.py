@@ -97,6 +97,8 @@ class Decisions:
     good_deal / ethical_concern: noul answers, true iff P >= 0.5.
     tone: STAKEHOLDER label (polite, neutral, rude).
     truncated: results this turn that came back truncated (RESULT `truncated`).
+    checks: the final shape-valid results the turn used, one per check however often it was
+        retried or re-run (RESULT `laya_checks`, GAME-05).
     """
 
     choice: str
@@ -105,6 +107,7 @@ class Decisions:
     ethical_concern: bool
     tone: str
     truncated: int
+    checks: int
 
     @property
     def walk_away(self) -> bool:
@@ -297,6 +300,7 @@ class DecisionRunner:
             ethical_concern=read_noul(moral_answers["ethical_concern"]),
             tone=stake_answers["tone"]["choice"],
             truncated=truncated,
+            checks=sum(result is not None for result in results),
         )
 
     def close(self) -> None:

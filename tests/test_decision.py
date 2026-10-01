@@ -309,6 +309,7 @@ def test_t_v0_dec_05_truncated(runner_for):
     decisions = runner_for(model).run(TECH, MORAL, STAKE)
     assert isinstance(decisions, Decisions)
     assert decisions.truncated == 1
+    assert decisions.checks == 3  # the re-run result is the one used: the check counts once
     assert model.calls == {"tech": 2, "moral": 1, "stake": 1}
     first, second = model.states["tech"]
     assert first == TECH and second == dict(TECH, history=HISTORY5[3:])
@@ -355,6 +356,7 @@ def test_t_v0_dec_06_predict_error(runner_for):
     model = FakeModel(only("moral", raise_first(ValueError("/home/akh/secret"))))
     decisions = runner_for(model).run(TECH, MORAL, STAKE)
     assert decisions.truncated == 0 and model.calls == {"tech": 1, "moral": 2, "stake": 1}
+    assert decisions.checks == 3  # the retried check counts once (GAME-05)
     # a second failure ends it: the class name only, never the message text
     model = FakeModel(only("tech", raise_always(ValueError("/home/akh/secret"))))
     error = fails(runner_for(model))
@@ -417,6 +419,7 @@ def test_t_v0_dec_07_timeout(runner_for):
     decisions = runner_for(model, timeout_s=0.1).run(TECH, MORAL, STAKE)
     assert decisions.ethical_concern is False
     assert model.calls == {"tech": 1, "moral": 2, "stake": 1}
+    assert decisions.checks == 3  # two attempts, one used result: still 3 for the turn
 
 
 def test_t_v0_dec_08_concurrent(runner_for):
@@ -437,6 +440,7 @@ def test_t_v0_dec_08_concurrent(runner_for):
         ethical_concern=False,
         tone="polite",
         truncated=0,
+        checks=3,
     )
     assert decisions.walk_away is False
     assert replace(decisions, choice="walk_away").walk_away is True
