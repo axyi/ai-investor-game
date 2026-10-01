@@ -353,12 +353,12 @@ def test_t_v0_dec_06_predict_error(runner_for):
         return behave
 
     # one failure is retried once and the turn passes
-    model = FakeModel(only("moral", raise_first(ValueError("/home/akh/secret"))))
+    model = FakeModel(only("moral", raise_first(ValueError("/home/player/secret"))))
     decisions = runner_for(model).run(TECH, MORAL, STAKE)
     assert decisions.truncated == 0 and model.calls == {"tech": 1, "moral": 2, "stake": 1}
     assert decisions.checks == 3  # the retried check counts once (GAME-05)
     # a second failure ends it: the class name only, never the message text
-    model = FakeModel(only("tech", raise_always(ValueError("/home/akh/secret"))))
+    model = FakeModel(only("tech", raise_always(ValueError("/home/player/secret"))))
     error = fails(runner_for(model))
     assert error.args == ("ValueError",) and error.category == "exception:ValueError"
     assert "/home" not in str(error) and "secret" not in repr(error)

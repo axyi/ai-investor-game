@@ -12,8 +12,8 @@ Task: fix F3 of the T8 review (EC-09) — patience carry across turns was not te
 
 Subagent prompt (verbatim):
 
-> You are the executor of fix F3 of the ai-investor-game spec-v0 review (repo root: /home/akh/aihome/coders-su/projects/ai-investor-game).
-> Your complete assignment is the fix-brief file /home/akh/aihome/coders-su/projects/ai-investor-game/docs/spec/task-briefs/v0-T8.md — read it first, whole, then do ONLY the section "F3" (plus the hard rules), reading the spec only through the line ranges it lists. The review it rests on is docs/reports/review-v0.md.
+> You are the executor of fix F3 of the ai-investor-game spec-v0 review (repo root: <repo>).
+> Your complete assignment is the fix-brief file <repo>/docs/spec/task-briefs/v0-T8.md — read it first, whole, then do ONLY the section "F3" (plus the hard rules), reading the spec only through the line ranges it lists. The review it rests on is docs/reports/review-v0.md.
 > Write only the paths F3 owns; do not commit or stage anything; never read or touch .env; never run gate 5.
 > Return the summary the brief's rule 9 defines (≤ 40 lines, no file contents) — nothing else.
 

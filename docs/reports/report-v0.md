@@ -67,3 +67,4 @@ NOTES:
 - Waived review notes: interactive `_stdin_line` and `_now` untested; `fit_state` outside the runner's error handling; `inf` timeout; timing-sensitive tests (margin ≈ 3×, 10/10 repeat runs stable); unspecified terminal-turn behaviour.
 - `import laya.common` goes through `importlib` inside `load_decision_model`; both live runs loaded the real weights, so the path is proven on this machine, not on a clean one.
 - No pre-existing dead code was found.
+- Post-verify (2026-10-01): `/verify-run` FAIL 2/8 — the `economics.md` row (filled by the lab) and the operator's home path in three test fixtures and the run's prompt / task-brief records; prompt `16` replaced them (`/home/player/…`, `<repo>`), gates 1–4 green, `git grep` for the home prefix empty. Commit history before prompt 16 still carries the old path.

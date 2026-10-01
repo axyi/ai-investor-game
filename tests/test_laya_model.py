@@ -159,7 +159,7 @@ def test_t_v0_dec_11_load_failure(fresh_progress_env):
 
         def failing(*args, _fail=fail, _laya=laya, _original=original, **kwargs):
             if ("subfolder" in kwargs) == (_fail == "ml"):
-                raise OSError("/home/akh/.cache/secret weights missing")
+                raise OSError("/home/player/.cache/secret weights missing")
             return _original(*args, **kwargs)
 
         laya.load = failing

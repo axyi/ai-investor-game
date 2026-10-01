@@ -12,8 +12,8 @@ Task: T2 of `docs/spec/spec-v0.md` §10. Delegated: yes — brief `docs/spec/tas
 
 Subagent prompt (verbatim):
 
-> You are the executor of task T2 of the ai-investor-game spec-v0 (repo root: /home/akh/aihome/coders-su/projects/ai-investor-game).
-> Your complete assignment is the task-brief file /home/akh/aihome/coders-su/projects/ai-investor-game/docs/spec/task-briefs/v0-T2.md — read it first, whole, and follow it exactly (read the spec only through the line ranges it lists).
+> You are the executor of task T2 of the ai-investor-game spec-v0 (repo root: <repo>).
+> Your complete assignment is the task-brief file <repo>/docs/spec/task-briefs/v0-T2.md — read it first, whole, and follow it exactly (read the spec only through the line ranges it lists).
 > Write only the paths it says you own; do not commit or stage anything; never read or touch .env.
 > Return the summary the brief's rule 9 defines (≤ 40 lines, no file contents) — nothing else.
 

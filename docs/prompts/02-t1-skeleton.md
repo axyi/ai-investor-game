@@ -37,8 +37,8 @@ Task: T1 of `docs/spec/spec-v0.md` §10. Delegated: yes — brief `docs/spec/tas
 
 Subagent prompt (verbatim):
 
-> You are the executor of task T1 of the ai-investor-game spec-v0 (repo root: /home/akh/aihome/coders-su/projects/ai-investor-game).
-> Your complete assignment is the task-brief file /home/akh/aihome/coders-su/projects/ai-investor-game/docs/spec/task-briefs/v0-T1.md — read it first, whole, and follow it exactly (read the spec only through the line ranges it lists).
+> You are the executor of task T1 of the ai-investor-game spec-v0 (repo root: <repo>).
+> Your complete assignment is the task-brief file <repo>/docs/spec/task-briefs/v0-T1.md — read it first, whole, and follow it exactly (read the spec only through the line ranges it lists).
 > Write only the paths it says you own; do not commit or stage anything; never read or touch .env.
 > Return the summary the brief's rule 9 defines (≤ 40 lines, no file contents) — nothing else.
 
@@ -65,7 +65,7 @@ First pass: the subagent wrote the skeleton, ran the one `uv lock` and returned 
 The orchestrator remapped the spec line ranges of briefs T1–T5 (erratum shifted them by +3…+10, checked against the headings), added an "Erratum 1 amendment" section to `docs/spec/task-briefs/v0-T1.md` and resumed the same subagent with this message (verbatim):
 
 > Resume T1: apply spec erratum 1 (commit 6f4ca0b) to your first pass, then re-run gates 1–4.
-> The task brief /home/akh/aihome/coders-su/projects/ai-investor-game/docs/spec/task-briefs/v0-T1.md was updated (new section "Erratum 1 amendment"; all spec line ranges shifted by +3…+10 — re-read the brief and use its new ranges). Do exactly its three delta steps: re-copy §3.1 into pyproject.toml via sed + diff (no second `uv lock`; `uv sync --locked` must still exit 0); move the stub `main` from game.py to investor_game/__main__.py with the `if __name__ == "__main__"` guard; gate 3 must exit 0.
+> The task brief <repo>/docs/spec/task-briefs/v0-T1.md was updated (new section "Erratum 1 amendment"; all spec line ranges shifted by +3…+10 — re-read the brief and use its new ranges). Do exactly its three delta steps: re-copy §3.1 into pyproject.toml via sed + diff (no second `uv lock`; `uv sync --locked` must still exit 0); move the stub `main` from game.py to investor_game/__main__.py with the `if __name__ == "__main__"` guard; gate 3 must exit 0.
 > Same rules as before: write only the paths you own, no commit/stage, never touch .env, summary only (≤ 40 lines, rule 9) — including repair cycles used (cycle 1 = your .env.example slip, cycle 2 = this amendment).
 
 Result: gates 1–4 exit 0 (verified again by the orchestrator in the main context); `pyproject.toml` identical to the amended §3.1; `uv.lock` unchanged; repair cycles for T1: 2/3.
