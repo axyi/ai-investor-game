@@ -17,29 +17,30 @@ the contract.
 - Language: Python 3.14 (latest stable: 3.14.7, released 2026-08-05; pinned
   via `.python-version`), uv-managed.
 - Frameworks/libs:
-  - `laya` — the decision model (typed choice / score decisions). Pin an
-    exact version: 0.3.20–0.3.22 shipped within five days (latest 0.3.22,
-    2026-09-29), so the API moves; the lecturer's reference repo requires
-    `laya>=0.3.21`. Verified 2026-09-30: `laya==0.3.22` resolves on Python
-    3.14 (torch 2.14.1 with cp314 wheels, transformers 5.18.0).
-  - Chat LLM — any OpenAI-compatible endpoint (LM Studio or OpenRouter);
-    the client library is fixed by `docs/spec/spec-v0.md`.
+  - `laya==0.3.22` — the decision model (typed choice / score decisions); exact pin,
+    the API moves between patch releases (0.3.20–0.3.22 shipped within five days).
+    Two checkpoints of `convaiinnovations/laya` at one pinned Hub commit (`PINNED_SHA` in
+    `investor_game/laya_model.py`): English for the TECH and MORAL checks, multilingual
+    for STAKEHOLDER. State budgets in tokens: 400 (English) / 900 (multilingual).
+  - `torch==2.14.1` — through the PyTorch CPU index (`[tool.uv.sources]`): the default
+    Linux wheel pulls CUDA (gigabytes) and the dev box is AMD Renoir.
+  - `httpx==0.28.1` — the chat client for any OpenAI-compatible endpoint (OpenRouter or
+    LM Studio); no OpenAI SDK.
   - Everything else: stdlib.
-- Tooling: uv, pytest, ruff.
+- Tooling: uv, `pytest==9.1.1`, `ruff==0.16.9` (`[dependency-groups] dev`).
 - NEVER add dependencies beyond the allowed list without asking.
-- Open for spec-v0: the default Linux torch wheel pulls CUDA (gigabytes) —
-  the dev box is AMD Renoir, so use the CPU index; the English `laya`
-  checkpoint takes 512 input tokens — state and negotiation history must
-  fit.
 
 ## Project layout
 
 - `docs/` — spec, prompts, reports, assets, `llm-usage.md` (see the lab's
   `standards/project-structure.md`).
 - Source and test layout: defined by `docs/spec/spec-v0.md`.
-- Context boundaries: NEVER read or print `.env`; NEVER read or edit
-  anything above the repository root; model weights stay in the Hugging
-  Face cache outside the repo, NEVER committed.
+- Context boundaries: NEVER read or print `.env` — the program gets it only via
+  `uv run --env-file .env`; the one allowed agent-side check is T0's
+  `grep -q '^NAME=.' .env` / `grep -qx 'NAME=<value from the go text>' .env`,
+  by exit status only (output discarded); NEVER read or edit anything above
+  the repository root; model weights stay in the Hugging Face cache outside
+  the repo, NEVER committed.
 
 ## Context discipline
 
@@ -115,7 +116,7 @@ uv sync --locked
 uv run --locked ruff check .
 uv run --locked ruff format --check .
 uv run --locked pytest
-<acceptance command — defined by docs/spec/spec-v0.md (a live game run needs the Laya weights and a reachable chat-LLM endpoint)>
+uv run --locked --env-file .env python -m investor_game --script acceptance/live-script.txt --show-decisions --check-result
 ```
 
 All five MUST exit 0, run in this order.
