@@ -1,6 +1,9 @@
 # ai-investor-game — implementation spec v0
 
 Status: ready for `go` — cross-review closed 2026-09-30 (3 rounds, `round_limit`, Appendix C)
+Erratum 1 (2026-10-01, at T1): §3.1 adds `extend-exclude = ["docs/spec"]` (ruff
+0.16.9 formats Python blocks in Markdown; gate 3 read this file) — re-copy §3.1 into
+`pyproject.toml`, `uv.lock` unchanged; PKG-05 names `main`'s module and its guard.
 Base: `main` = `8385584` (scaffold, no tag) + paperwork: this file,
 `docs/prompts/01-spec-v0.md`, `docs/llm-usage.md` row 1. Lab assignment 9,
 version `0.1.0`. Ids `REQ-V0-<GROUP>-NN` (MUST | NON-GOAL); tests
@@ -208,7 +211,9 @@ modified: README.md, AGENTS.md, docs/llm-usage.md
 ```
 
 **REQ-V0-PKG-02 (MUST)** `pyproject.toml` = §3.1 byte for byte; flat package; no
-`src/`, packaging, other module or dependency.
+`src/`, packaging, other module or dependency. `[tool.ruff]` excludes `docs/spec` because
+ruff 0.16.9 also formats Python blocks inside Markdown and the spec is not the
+executor's to edit (EC-01); `uv.lock` does not depend on `[tool.ruff]`.
 
 **REQ-V0-PKG-03 (MUST)** `laya` / `torch` are imported only inside
 `laya_model.load_decision_model()`; importing any `investor_game` module leaves
@@ -233,6 +238,10 @@ and injects them — no module-level `laya` import, PKG-03);
 options, fallback)`; `play(runner, chat, read_line, write, err=None, *, show_decisions, now)
 -> dict` (`read_line` → `None` at EOF; returns RESULT, which `main` prints); `check_result(result, status) -> tuple[int, str | None]`;
 `main(argv=None, *, env=None, load_decision=None, make_chat=None, read_line=None, write=None, err=None) -> int`;
+`main` lives in `investor_game/__main__.py` (argparse, exit codes), which ends with
+`if __name__ == "__main__": raise SystemExit(main())` so TST-02's import never starts a
+game; `play` and `check_result` live in `game.py`; tests import `main` from
+`investor_game.__main__`;
 `err: Callable[[str], None]`, `None` → write to `sys.stderr` (GAME-01 splits the channels).
 
 ---
@@ -276,6 +285,7 @@ testpaths = ["tests"]
 [tool.ruff]
 target-version = "py314"
 line-length = 100
+extend-exclude = ["docs/spec"]
 ```
 
 Skeletons: API references re-runnable against the pins (`uv run --locked
@@ -1077,7 +1087,7 @@ Indicators:
 | T | work → acceptance | reading | delegate? |
 |---|---|---|---|
 | T0 | EC-06 → pass or RPT-02 | §1, §7, §11 `go` | **no** — *commands only* |
-| T1 | `.python-version`, §3.1, `.env.example`, `uv lock` + EC-07, empty modules, stub `main`, `tests/{__init__,conftest}.py`, `test_guards.py` → gates 1–4 | §2, §3.1, §6, §8; `.gitignore:1-6`, `AGENTS.md:15-42` | **yes** — `v0-T1.md` |
+| T1 | `.python-version`, §3.1, `.env.example`, `uv lock` + EC-07, empty modules, stub `main` in `__main__.py` (E3 guard), `tests/{__init__,conftest}.py`, `test_guards.py` → gates 1–4 | §2, §3.1, §6, §8; `.gitignore:1-6`, `AGENTS.md:15-42` | **yes** — `v0-T1.md` |
 | T2 | `domain`, `parse`, `rules` + tests → gates 1–4 | §2 PKG-05, §4.1–4.3, §6, §8 | **yes** — `v0-T2.md` |
 | T3 | `decision`, `laya_model` + tests → gates 1–4 | §2 PKG-03–05, §3.2, §3.4, §4.4, §7, §8; T2 signatures (grep) | **yes** — `v0-T3.md` |
 | T4 | `config`, `chat` + tests → gates 1–4 | §2 PKG-05, §3.3, §5, §6, §7, §8; `domain.py` signatures | **yes** — `v0-T4.md` |

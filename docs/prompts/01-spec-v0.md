@@ -67,3 +67,16 @@ checks structural invariants only.
   or High finding; record which in Appendix C.
 - A decision the operator did not take and the measurements cannot settle → ask the
   operator; never pick silently.
+
+## Erratum 1 — 2026-10-01
+
+Raised by the `go` run at T1: gate 3 red on `docs/spec/spec-v0.md` (ruff 0.16.9 formats
+Python blocks in Markdown), which EC-01 forbids the executor to edit; PKG-05 named `main`
+without its module.
+
+- Goal: unblock T1 without touching the executor's files.
+- Constraints: spec only; rule `standards/workflow.md` §1 (untouchable files are excluded
+  from lint/format gates) decides the fix, not reformatting the proven skeletons.
+- Acceptance: `ruff format --check .` and `ruff check .` exit 0 with the new §3.1 in a
+  scratch copy; Appendix A bijection unchanged; header carries the erratum line.
+- Stop: any further contradiction → back to the operator.
