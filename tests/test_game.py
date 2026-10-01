@@ -384,6 +384,33 @@ def test_t_v0_game_10_show_decisions():
     quiet = play_lines(SCRIPT)[1]
     assert not any(line.startswith("[решения]") for line in quiet)
 
+    # GAME-03/04: the flag reaches `play` through `main`; the same run without it has no line
+    def through_main(argv):
+        feed, written, errors = iter(SCRIPT), [], []
+        code = main(
+            argv,
+            env=ENV,
+            load_decision=FakeDecisionModel,
+            make_chat=lambda config: FakeChatModel(),
+            read_line=lambda: next(feed, None),
+            write=written.append,
+            err=errors.append,
+        )
+        assert code == 0 and errors == []
+        return [line for line in written if line.startswith("[решения]")]
+
+    assert through_main(["--show-decisions"]) == [
+        (
+            "[решения] ход 1: accept=1 reaction=counter good_deal=нет ethical_concern=нет "
+            "tone=neutral → counter; правила: —"
+        ),
+        (
+            "[решения] ход 2: accept=4 reaction=accept good_deal=да ethical_concern=нет "
+            "tone=neutral → deal; правила: —"
+        ),
+    ]
+    assert through_main([]) == []
+
     # a Laya walk_away reaction ends the game: R2, wired through `walk_away=`
     def walks_away(name, attempt, result):
         if name == "tech":
